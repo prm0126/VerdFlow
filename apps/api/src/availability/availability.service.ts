@@ -1,0 +1,87 @@
+import { AVAILABILITY_STATES, type AvailabilityState } from '@vf/shared';
+import type { Pool } from 'pg';
+import { audit } from '../audit/audit';
+import type { AppConfig } from '../config';
+import { many, one, withTransaction } from '../database/db';
+
+export interface AvailabilityRow {
+  radiologist_id: string;
+  code: string;
+  full_name: string;
+  status: AvailabilityState;
+  heartbeat_at: string | null;
+  present: boolean;
+  capacity_units: number;
+  active_units: number;
+  active_assignments: number;
+  teams: string[];
+}
+
+export class AvailabilityService {
+  constructor(
+    private readonly pool: Pool,
+    private readonly config: AppConfig,
+  ) {}
+
+  list(): Promise<AvailabilityRow[]> {
+    return many<AvailabilityRow>(
+      this.pool,
+      `SELECT r.id AS radiologist_id, r.code, r.full_name, st.status, st.heartbeat_at,
+              (st.heartbeat_at IS NOT NULL AND st.heartbeat_at > now() - make_interval(secs => $1)) AS present,
+              st.capacity_units, st.active_units,
+              (SELECT count(*)::int FROM assignments a WHERE a.radiologist_id = r.id AND a.status IN ('reserved','sent','delivered')) AS active_assignments,
+              coalesce((SELECT array_agg(t.code ORDER BY t.code) FROM team_members tm JOIN teams t ON t.id = tm.team_id
+                         WHERE tm.radiologist_id = r.id AND tm.valid_from <= CURRENT_DATE
+                           AND (tm.valid_to IS NULL OR tm.valid_to >= CURRENT_DATE)), '{}') AS teams
+         FROM radiologists r JOIN radiologist_state st ON st.radiologist_id = r.id
+        WHERE r.active
+        ORDER BY r.full_name`,
+      [this.config.presenceStaleSeconds],
+    );
+  }
+
+  /** A coordinator or the radiologist changes status. Locks the state row the allocation gate locks. */
+  async setStatus(radiologistId: string, status: string, capacityUnits: number | undefined, actorId: string, ip?: string) {
+    if (!(AVAILABILITY_STATES as readonly string[]).includes(status)) throw new Error('Unknown availability status');
+    if (capacityUnits !== undefined && (!Number.isFinite(capacityUnits) || capacityUnits < 0 || capacityUnits > 1000)) {
+      throw new Error('Capacity must be between 0 and 1000');
+    }
+    return withTransaction(this.pool, async (client) => {
+      const before = await one<{ status: string; capacity_units: number }>(
+        client,
+        'SELECT status, capacity_units FROM radiologist_state WHERE radiologist_id = $1 FOR UPDATE',
+        [radiologistId],
+      );
+      if (!before) return null;
+      await client.query(
+        `UPDATE radiologist_state SET status = $2, capacity_units = coalesce($3, capacity_units), version = version + 1, updated_at = now()
+          WHERE radiologist_id = $1`,
+        [radiologistId, status, capacityUnits ?? null],
+      );
+      await audit(client, {
+        actorType: 'user',
+        actorId,
+        action: 'availability.changed',
+        entityType: 'radiologist',
+        entityId: radiologistId,
+        detail: { from: before.status, to: status, capacityFrom: before.capacity_units, capacityTo: capacityUnits ?? before.capacity_units },
+        ip,
+      });
+      return { radiologistId, status };
+    });
+  }
+
+  /**
+   * Presence heartbeats from the authoritative source (the reporting workstation, PACS or RIS), sent by an
+   * inbound integration partner. Logging in to VerdFlow does not count as presence.
+   */
+  async heartbeat(radiologistCodes: string[]): Promise<{ updated: number }> {
+    const codes = [...new Set(radiologistCodes)].slice(0, 1000);
+    const r = await this.pool.query(
+      `UPDATE radiologist_state st SET heartbeat_at = now(), updated_at = now()
+         FROM radiologists r WHERE r.id = st.radiologist_id AND r.code = ANY($1::text[]) AND r.active`,
+      [codes],
+    );
+    return { updated: r.rowCount ?? 0 };
+  }
+}

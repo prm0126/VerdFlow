@@ -1,0 +1,79 @@
+# VerdFlow
+
+Teleradiology workflow orchestrator: HL7 orders come in from a source Mirth, versioned rules choose a
+team and a radiologist, the assignment is committed atomically, and an HL7 message goes out to a
+third-party Mirth with its acknowledgment tracked.
+
+This is the **Phase B foundation and first vertical slice** of the architecture plan
+(see [docs/phase-b-slice.md](docs/phase-b-slice.md) for what is built, what is stubbed and what comes next).
+
+| Part | Where |
+|---|---|
+| API (NestJS, TypeScript) | `apps/api` |
+| Background worker (intake processing, outbound delivery) | `apps/api/src/worker.ts` |
+| Web app (React, TypeScript, Vite) | `apps/web` |
+| HL7 helpers, rule model and evaluator | `packages/shared` |
+
+## Run it locally
+
+You need Node.js 20 or later, pnpm (`corepack enable`) and PostgreSQL with an empty database called `verdflow`.
+
+```bash
+git clone https://github.com/prm0126/VerdFlow.git
+cd VerdFlow
+git checkout claude/elegant-planck-66stmy
+cp .env.example .env          # then put your PostgreSQL password into DATABASE_URL
+pnpm install
+pnpm db:migrate               # creates the tables in verdflow
+pnpm db:seed                  # demo hospital, radiologists, rules, users and partner keys
+```
+
+`db:seed` prints the sign-in passwords and partner API keys once and saves them to `.dev-keys.json`
+(git-ignored). Set `ADMIN_PASSWORD=...` before `pnpm db:seed` to choose the admin password yourself.
+
+Then start three terminals:
+
+```bash
+pnpm dev          # API on http://localhost:4000 and web app on http://localhost:5173
+pnpm dev:worker   # processes intake and delivers outbound HL7
+pnpm simulate     # fake source Mirth, third-party Mirth and workstation presence
+```
+
+Open http://localhost:5173 and sign in as `admin@verdflow.local`. `pnpm simulate --orders 20 --reject-every 7`
+sends 20 orders and makes the fake destination reject every 7th assignment.
+
+## Tests
+
+The API tests need a second, throwaway database (it is wiped on every run):
+
+```sql
+CREATE DATABASE verdflow_test;
+```
+
+Set `TEST_DATABASE_URL` in `.env`, then:
+
+```bash
+pnpm typecheck
+pnpm --filter @vf/api exec jest --runInBand
+```
+
+## Sending HL7
+
+```
+POST /api/integration/hl7
+Authorization: Bearer <inbound partner key>
+Content-Type: x-application/hl7-v2+er7
+
+MSH|^~\&|RIS|CITYH|VERDFLOW|VERDFLOW|20261020101500||ORM^O01|MSG0001|P|2.5.1|||AL|NE
+PID|1||MRN123^^^CITYH^MR||Smith^Jane
+PV1|1|O|RAD^ROOM1||||||||||||||||ENC77
+ORC|NW|PL1|ACC1
+OBR|1|PL1|ACC1|CTHEAD^CT head|S|||||||||||||ACC1||||||CT
+```
+
+The reply is a commit acknowledgment (`MSA|CA`), sent only after the message is stored. Clinical
+processing happens afterwards, in the worker. Supported order controls: `NW` (new), `XO` (update),
+`CA` (cancel). Accession is read from OBR-18, then ORC-3, then OBR-3; modality from OBR-24; priority from OBR-5.
+
+The outbound assignment (profile `VF-ASSIGN-1`: ORM^O01 with a `ZAS` segment) is a starting proposal.
+The real mapping must come from the interface specification agreed with the third party.
