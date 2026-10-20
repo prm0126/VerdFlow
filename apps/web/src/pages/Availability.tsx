@@ -16,6 +16,10 @@ interface Row {
   active_units: number;
   active_assignments: number;
   teams: string[];
+  on_shift: boolean;
+  absence: string | null;
+  shift_ends_at: string | null;
+  blockers: string[];
 }
 
 export function Availability() {
@@ -31,12 +35,21 @@ export function Availability() {
       setActionError((err as Error).message);
     }
   };
+  const breakAction = async (id: string, action: 'start' | 'end') => {
+    setActionError(null);
+    try {
+      await api(`/rota/radiologists/${id}/break`, { method: 'POST', body: { action } });
+      await reload();
+    } catch (err) {
+      setActionError((err as Error).message);
+    }
+  };
   return (
     <>
       <h1>Radiologist availability</h1>
       <p className="muted small">
-        A radiologist receives new work only when they are ready, present (a recent heartbeat from the reporting workstation) and have
-        capacity. Changing status does not withdraw work they already hold.
+        A radiologist receives new work only when they are on a shift, not on leave or a break, ready, present (a recent heartbeat from the
+        reporting workstation) and have capacity. None of these withdraws work they already hold.
       </p>
       <ErrorBox error={error ?? actionError} />
       <table>
@@ -44,6 +57,7 @@ export function Availability() {
           <tr>
             <th>Radiologist</th>
             <th>Teams</th>
+            <th>Can take new work</th>
             <th>Status</th>
             <th>Presence</th>
             <th>Load (work units)</th>
@@ -57,6 +71,37 @@ export function Availability() {
                 {r.full_name} <span className="small muted">{r.code}</span>
               </td>
               <td>{r.teams.join(', ') || '—'}</td>
+              <td>
+                {r.blockers.length === 0 ? (
+                  r.active_units >= r.capacity_units ? <span className="badge warn">At capacity</span> : <span className="badge good">Yes</span>
+                ) : (
+                  r.blockers.map((b) => (
+                    <div key={b}>
+                      <span className="badge grey">{b}</span>
+                    </div>
+                  ))
+                )}
+                {r.shift_ends_at && (
+                  <div className="small muted">
+                    Shift ends {new Date(r.shift_ends_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                )}
+                {can('availability.manage') && (
+                  <div style={{ marginTop: '0.3rem' }}>
+                    {r.absence === 'break' ? (
+                      <button className="secondary" onClick={() => breakAction(r.radiologist_id, 'end')}>
+                        End break
+                      </button>
+                    ) : (
+                      !r.absence && (
+                        <button className="secondary" onClick={() => breakAction(r.radiologist_id, 'start')}>
+                          Start break
+                        </button>
+                      )
+                    )}
+                  </div>
+                )}
+              </td>
               <td>
                 {can('availability.manage') ? (
                   <select value={r.status} onChange={(e) => update(r.radiologist_id, { status: e.target.value })} aria-label={`Status for ${r.full_name}`}>

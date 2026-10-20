@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { releaseCapacity } from '../availability/capacity';
 import type { AppConfig } from '../config';
 import { one, withTransaction } from '../database/db';
+import { absenceNow, onShiftNow } from '../rota/rota.service';
 import { backoffSeconds } from '../processing/processor';
 
 interface OutboundRow {
@@ -122,14 +123,14 @@ export class DeliveryWorker {
     const a = await one<{ status: string; radiologist_id: string; work_units: number; study_state: string; ok: boolean }>(
       client,
       `SELECT a.status, a.radiologist_id, a.work_units, s.state AS study_state,
-              (r.active AND st.status = 'ready'
+              (r.active AND st.status = 'ready' AND (${onShiftNow('r.id')} OR NOT $2::boolean) AND ${absenceNow('r.id')} IS NULL
                AND EXISTS (SELECT 1 FROM radiologist_privileges rp WHERE rp.radiologist_id = r.id AND rp.modality_code = s.modality_code
                              AND (rp.valid_to IS NULL OR rp.valid_to >= CURRENT_DATE))) AS ok
          FROM assignments a JOIN studies s ON s.id = a.study_id JOIN radiologists r ON r.id = a.radiologist_id
          JOIN radiologist_state st ON st.radiologist_id = r.id
         WHERE a.id = $1
         FOR UPDATE OF a, s`,
-      [row.assignment_id],
+      [row.assignment_id, this.config.rotaRequired],
     );
     if (!a || a.status === 'cancelled' || a.study_state === 'cancelled') {
       await client.query(`UPDATE outbound_messages SET status = 'cancelled', completed_at = now() WHERE id = $1`, [row.id]);

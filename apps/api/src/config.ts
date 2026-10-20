@@ -20,6 +20,8 @@ export interface AppConfig {
   continuityWindowHours: number;
   sessionHours: number;
   outboundMaxAttempts: number;
+  /** Only radiologists on a rota shift receive new work. */
+  rotaRequired: boolean;
   /** An unsent reservation older than this is revalidated before its first transmission. */
   revalidateAfterSeconds: number;
 }
@@ -39,6 +41,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     sessionHours: 12,
     outboundMaxAttempts: 8,
     revalidateAfterSeconds: 300,
+    rotaRequired: process.env.ROTA_REQUIRED !== 'false',
     ...overrides,
   };
 }

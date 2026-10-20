@@ -101,10 +101,27 @@ async function main() {
       { code: 'R006', fullName: 'Dr Farid Khan', grade: 'REGISTRAR', specialties: [], modalities: ['XR'], teams: ['GENERAL'] },
     ];
     for (const r of rads) {
-      await save('radiologists', { ...r, externalId: `EXT-${r.code}`, hospitals: ['CITYH'], capacityUnits: 10 });
+      await save('employees', { code: `E${r.code}`, fullName: r.fullName, jobTitle: r.grade === 'CONSULTANT' ? 'Consultant radiologist' : 'Specialty registrar' });
+      await save('radiologists', { ...r, externalId: `EXT-${r.code}`, hospitals: ['CITYH'], capacityUnits: 10, employeeCode: `E${r.code}` });
+    }
+    for (const room of [
+      { code: 'ROOM1', name: 'CT and MR suite', modalities: ['CT', 'MR'] },
+      { code: 'ROOM2', name: 'General imaging', modalities: ['XR', 'US', 'CT'] },
+      { code: 'ROOM3', name: 'Mixed room', modalities: [] },
+    ]) {
+      await save('rooms', { hospitalCode: 'CITYH', ...room });
     }
     // Demo only: mark everyone ready. Presence still has to come from the simulator's heartbeats.
     await pool.query(`UPDATE radiologist_state SET status = 'ready' WHERE status = 'offline'`);
+    // Demo only: a 24-hour shift from an hour ago for anyone not on shift now. Run the seed again tomorrow.
+    const added = await pool.query(
+      `INSERT INTO shifts (radiologist_id, starts_at, ends_at, note, created_by)
+       SELECT r.id, now() - interval '1 hour', now() + interval '23 hours', 'Demo shift', $1
+         FROM radiologists r
+        WHERE r.active AND NOT EXISTS (SELECT 1 FROM shifts s WHERE s.radiologist_id = r.id AND s.ends_at > now() - interval '1 hour')`,
+      [adminId],
+    );
+    if (added.rowCount) console.log(`Added a 24-hour demo shift for ${added.rowCount} radiologists.`);
 
     const published = await one(pool, `SELECT 1 FROM rule_sets WHERE status = 'published'`);
     if (!published) {

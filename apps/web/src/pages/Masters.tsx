@@ -24,12 +24,34 @@ const KINDS: Record<string, { title: string; fields: Field[] }> = {
       { key: 'active', label: 'Active', type: 'bool' },
     ],
   },
+  rooms: {
+    title: 'Rooms',
+    fields: [
+      { key: 'hospitalCode', label: 'Hospital', type: 'text', createOnly: true },
+      { key: 'code', label: 'Code (as sent in PV1-3, second part)', type: 'text', createOnly: true },
+      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'modalities', label: 'Modalities allowed (blank for any)', type: 'list' },
+      { key: 'status', label: 'Status', type: 'select', options: ['open', 'closed'] },
+      { key: 'active', label: 'Active', type: 'bool' },
+    ],
+  },
+  employees: {
+    title: 'Employees',
+    fields: [
+      { key: 'code', label: 'Employee code', type: 'text', createOnly: true },
+      { key: 'fullName', label: 'Name', type: 'text' },
+      { key: 'email', label: 'Work email', type: 'text' },
+      { key: 'jobTitle', label: 'Job title', type: 'text' },
+      { key: 'active', label: 'Active', type: 'bool' },
+    ],
+  },
   radiologists: {
     title: 'Radiologists',
     fields: [
       { key: 'code', label: 'Code', type: 'text', createOnly: true },
       { key: 'fullName', label: 'Name', type: 'text' },
       { key: 'externalId', label: 'ID known to the destination', type: 'text' },
+      { key: 'employeeCode', label: 'Employee code', type: 'text' },
       { key: 'grade', label: 'Grade', type: 'select', options: ['', 'CONSULTANT', 'REGISTRAR'] },
       { key: 'specialties', label: 'Specialties', type: 'list' },
       { key: 'modalities', label: 'Modality privileges', type: 'list' },
@@ -92,7 +114,9 @@ function cell(v: unknown) {
 
 function Form({ kind, initial, onDone }: { kind: string; initial: Rec | null; onDone: (msg?: string) => void }) {
   const spec = KINDS[kind];
-  const [rec, setRec] = useState<Rec>(initial ?? { active: true, ...(kind === 'partners' ? { direction: 'inbound', timeoutMs: 10000 } : {}) });
+  const [rec, setRec] = useState<Rec>(
+    initial ?? { active: true, ...(kind === 'partners' ? { direction: 'inbound', timeoutMs: 10000 } : {}), ...(kind === 'rooms' ? { status: 'open' } : {}) },
+  );
   const [err, setErr] = useState<{ message: string; issues: string[] } | null>(null);
   const save = async () => {
     setErr(null);
@@ -214,7 +238,7 @@ export function Masters() {
         </thead>
         <tbody>
           {data?.map((r) => (
-            <tr key={String(r.code)}>
+            <tr key={`${String(r.hospitalCode ?? '')}${String(r.code)}`}>
               {spec.fields.map((f) => (
                 <td key={f.key}>{cell(r[f.key])}</td>
               ))}

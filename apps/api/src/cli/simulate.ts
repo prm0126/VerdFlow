@@ -72,7 +72,7 @@ function order(n: number, run: string) {
   return [
     `MSH|^~\\&|RIS|CITYH|VERDFLOW|VERDFLOW|${ts}||ORM^O01|${run}-${n}|P|2.5.1|||AL|NE`,
     `PID|1||${patient}^^^CITYH^MR||Sample^Patient${Math.floor(n / 2)}`,
-    `PV1|1|O|RAD^ROOM${(n % 3) + 1}||||||||||||||||ENC${run}${Math.floor(n / 2)}`,
+    `PV1|1|O|RAD^${s.mod === 'CT' || s.mod === 'MR' ? 'ROOM1' : 'ROOM2'}||||||||||||||||ENC${run}${Math.floor(n / 2)}`,
     `ORC|NW|PL${run}${n}|ACC${run}${n}`,
     `OBR|1|PL${run}${n}|ACC${run}${n}|${s.svc}|${s.pri}|||||||||||||ACC${run}${n}||||||${s.mod}`,
   ].join('\r');

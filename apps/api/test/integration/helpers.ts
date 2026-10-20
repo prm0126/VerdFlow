@@ -62,6 +62,7 @@ export async function seed(pool: Pool): Promise<Fixture> {
     await save('radiologists', { ...r, externalId: `EXT-${r.code}`, modalities: ['CT', 'XR'], hospitals: ['CITYH'], capacityUnits: 10 });
   }
   await pool.query(`UPDATE radiologist_state SET status = 'ready', heartbeat_at = now()`);
+  await pool.query(`INSERT INTO shifts (radiologist_id, starts_at, ends_at) SELECT id, now() - interval '1 hour', now() + interval '12 hours' FROM radiologists`);
 
   const rules = new RulesService(pool);
   const draft = await rules.createDraft(

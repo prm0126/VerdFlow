@@ -54,9 +54,9 @@ details, audited raw HL7 views).
 ## Not built yet
 
 - Vetting, TAT timers and escalations, peer review (Phase D).
-- Rota, shifts, leave and breaks as calendars (only the current status is held today), on-call, handover.
+- ~~Rota, shifts, leave and breaks~~: done in Phase C. Handover is still to do.
 - Rule simulation and shadow evaluation; scheduled activation; rule scopes (national, regional, hospital).
 - Accept/reject and report lifecycle events from the third party after the ACK.
-- Room/location restrictions as their own rule type (rules can already test `study.room` and `study.location`).
+- ~~Room restrictions~~: done in Phase C.
 - National scale: cells, partitioned streams, sharded databases, load tests (Phase E).
-- User management screens (users are created by `pnpm db:seed` for now).
+- ~~User management screens~~: done in Phase C.

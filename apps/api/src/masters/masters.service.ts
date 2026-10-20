@@ -34,6 +34,22 @@ export const radiologistSchema = z.object({
   modalities: z.array(code).max(50).default([]),
   hospitals: z.array(code).max(500).default([]),
   teams: z.array(code).max(50).default([]),
+  employeeCode: code.nullable().optional(),
+});
+export const employeeSchema = z.object({
+  code,
+  fullName: name,
+  email: z.string().trim().email().max(200).nullable().optional(),
+  jobTitle: z.string().trim().max(80).nullable().optional(),
+  active: z.boolean().default(true),
+});
+export const roomSchema = z.object({
+  hospitalCode: code,
+  code,
+  name,
+  modalities: z.array(code).max(20).default([]),
+  status: z.enum(['open', 'closed']).default('open'),
+  active: z.boolean().default(true),
 });
 export const partnerSchema = z.object({
   code,
@@ -47,7 +63,7 @@ export const partnerSchema = z.object({
   active: z.boolean().default(true),
 });
 
-export type MasterKind = 'hospitals' | 'modalities' | 'services' | 'teams' | 'radiologists' | 'partners';
+export type MasterKind = 'hospitals' | 'rooms' | 'modalities' | 'services' | 'teams' | 'employees' | 'radiologists' | 'partners';
 
 export class MasterError extends Error {
   constructor(
@@ -80,6 +96,19 @@ export class MastersService {
     switch (kind) {
       case 'hospitals':
         return many(this.pool, `SELECT h.code, h.name, h.timezone, h.active, p.code AS "outboundPartnerCode" FROM hospitals h LEFT JOIN integration_partners p ON p.id = h.outbound_partner_id ORDER BY h.code`);
+      case 'rooms':
+        return many(
+          this.pool,
+          `SELECT h.code AS "hospitalCode", r.code, r.name, r.modalities, r.status, r.active
+             FROM rooms r JOIN hospitals h ON h.id = r.hospital_id ORDER BY h.code, r.code`,
+        );
+      case 'employees':
+        return many(
+          this.pool,
+          `SELECT e.code, e.full_name AS "fullName", e.email, e.job_title AS "jobTitle", e.active,
+                  (SELECT r.code FROM radiologists r WHERE r.employee_id = e.id LIMIT 1) AS "radiologistCode"
+             FROM employees e ORDER BY e.full_name`,
+        );
       case 'modalities':
         return many(this.pool, `SELECT code, name, work_units AS "workUnits", active FROM modalities ORDER BY code`);
       case 'services':
@@ -96,6 +125,7 @@ export class MastersService {
           this.pool,
           `SELECT r.code, r.full_name AS "fullName", r.external_id AS "externalId", r.grade, r.specialties, r.active,
                   st.capacity_units AS "capacityUnits",
+                  (SELECT e.code FROM employees e WHERE e.id = r.employee_id) AS "employeeCode",
                   coalesce((SELECT array_agg(modality_code ORDER BY modality_code) FROM radiologist_privileges WHERE radiologist_id = r.id
                              AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)), '{}') AS modalities,
                   coalesce((SELECT array_agg(h.code ORDER BY h.code) FROM radiologist_hospitals rh JOIN hospitals h ON h.id = rh.hospital_id
@@ -158,6 +188,30 @@ export class MastersService {
           result = { code: s.code };
           break;
         }
+        case 'rooms': {
+          const r = parse(roomSchema, input);
+          const [hospitalId] = await idsFor(client, 'hospitals', [r.hospitalCode]);
+          await idsFor(client, 'modalities', r.modalities);
+          await client.query(
+            `INSERT INTO rooms (hospital_id, code, name, modalities, status, active) VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (hospital_id, code) DO UPDATE SET name = EXCLUDED.name, modalities = EXCLUDED.modalities,
+               status = EXCLUDED.status, active = EXCLUDED.active`,
+            [hospitalId, r.code, r.name, r.modalities, r.status, r.active],
+          );
+          result = { code: `${r.hospitalCode}/${r.code}` };
+          break;
+        }
+        case 'employees': {
+          const e = parse(employeeSchema, input);
+          await client.query(
+            `INSERT INTO employees (code, full_name, email, job_title, active) VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (code) DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email,
+               job_title = EXCLUDED.job_title, active = EXCLUDED.active`,
+            [e.code, e.fullName, e.email ?? null, e.jobTitle ?? null, e.active],
+          );
+          result = { code: e.code };
+          break;
+        }
         case 'teams': {
           const t = parse(teamSchema, input);
           await client.query(
@@ -194,6 +248,17 @@ export class MastersService {
       [r.code, r.fullName, r.externalId, r.grade ?? null, r.specialties, r.active],
     );
     const id = row!.id;
+    if (r.employeeCode !== undefined) {
+      const employeeId = r.employeeCode
+        ? (await one<{ id: string }>(client, 'SELECT id FROM employees WHERE code = $1', [r.employeeCode]))?.id
+        : null;
+      if (r.employeeCode && !employeeId) throw new MasterError(`No employee has code ${r.employeeCode}`);
+      const taken = employeeId
+        ? await one(client, 'SELECT 1 FROM radiologists WHERE employee_id = $1 AND id <> $2', [employeeId, id])
+        : null;
+      if (taken) throw new MasterError(`Employee ${r.employeeCode} is already linked to another radiologist`);
+      await client.query('UPDATE radiologists SET employee_id = $2 WHERE id = $1', [id, employeeId]);
+    }
     await client.query(`INSERT INTO radiologist_state (radiologist_id) VALUES ($1) ON CONFLICT DO NOTHING`, [id]);
     await client.query('SELECT 1 FROM radiologist_state WHERE radiologist_id = $1 FOR UPDATE', [id]);
     await client.query('UPDATE radiologist_state SET capacity_units = $2, version = version + 1, updated_at = now() WHERE radiologist_id = $1', [id, r.capacityUnits]);

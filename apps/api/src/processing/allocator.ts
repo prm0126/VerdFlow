@@ -9,6 +9,7 @@ import {
 import type { PoolClient } from 'pg';
 import type { AppConfig } from '../config';
 import { many, one } from '../database/db';
+import { absenceNow, onShiftNow } from '../rota/rota.service';
 
 export interface StudyRow {
   id: string;
@@ -43,6 +44,8 @@ interface CandidateRow {
   heartbeat_age_s: number | null;
   capacity_units: number | null;
   active_units: number | null;
+  on_shift: boolean;
+  absence: string | null;
 }
 
 export interface CandidateTrace {
@@ -56,7 +59,7 @@ export interface CandidateTrace {
 }
 
 export interface AllocationOutcome {
-  outcome: 'assigned' | 'no_eligible' | 'no_route' | 'no_rules' | 'no_destination';
+  outcome: 'assigned' | 'no_eligible' | 'no_route' | 'no_rules' | 'no_destination' | 'room_hold';
   reasonCode: string;
   evaluationId: string;
   assignmentId?: string;
@@ -117,6 +120,11 @@ export async function allocate(client: PoolClient, study: StudyRow, config: AppC
   );
   if (!destination) {
     return toManualReview(client, study, facts, ruleSet, { routing: null }, [], {}, 'no_destination', 'NO_DESTINATION');
+  }
+
+  const room = await checkRoom(client, study);
+  if (room.hold) {
+    return toManualReview(client, study, facts, ruleSet, { routing: null, room }, [], {}, 'room_hold', room.reasonCode);
   }
 
   const routing = evaluateRouting(def, facts);
@@ -244,7 +252,8 @@ function candidateRows(client: PoolClient, teamCode: string, study: StudyRow, ra
             EXISTS (SELECT 1 FROM radiologist_hospitals rh
                      WHERE rh.radiologist_id = r.id AND rh.hospital_id = $3) AS has_hospital,
             st.status, extract(epoch FROM now() - st.heartbeat_at)::float AS heartbeat_age_s,
-            st.capacity_units, st.active_units
+            st.capacity_units, st.active_units,
+            ${onShiftNow('r.id')} AS on_shift, ${absenceNow('r.id')} AS absence
        FROM teams t
        JOIN team_members tm ON tm.team_id = t.id
                            AND tm.valid_from <= CURRENT_DATE AND (tm.valid_to IS NULL OR tm.valid_to >= CURRENT_DATE)
@@ -254,6 +263,35 @@ function candidateRows(client: PoolClient, teamCode: string, study: StudyRow, ra
       ORDER BY r.code`,
     [teamCode, study.modality_code, study.hospital_id, radiologistId],
   );
+}
+
+const ABSENCE_REASON: Record<string, string> = { break: 'ON_BREAK', leave: 'ON_LEAVE', training: 'ON_TRAINING', other: 'ABSENT' };
+
+export interface RoomCheck {
+  hold: boolean;
+  reasonCode: string;
+  room?: string;
+}
+
+/**
+ * Room and modality check for the performing room. Applies only when the hospital has rooms in the
+ * master; otherwise it is recorded as not checked.
+ */
+async function checkRoom(client: PoolClient, study: StudyRow): Promise<RoomCheck> {
+  if (!study.room) return { hold: false, reasonCode: 'NO_ROOM_GIVEN' };
+  const configured = await one(client, 'SELECT 1 FROM rooms WHERE hospital_id = $1 AND active LIMIT 1', [study.hospital_id]);
+  if (!configured) return { hold: false, reasonCode: 'ROOMS_NOT_CONFIGURED', room: study.room };
+  const room = await one<{ status: string; modalities: string[] }>(
+    client,
+    'SELECT status, modalities FROM rooms WHERE hospital_id = $1 AND code = $2 AND active',
+    [study.hospital_id, study.room],
+  );
+  if (!room) return { hold: true, reasonCode: 'UNKNOWN_ROOM', room: study.room };
+  if (room.status !== 'open') return { hold: true, reasonCode: 'ROOM_CLOSED', room: study.room };
+  if (room.modalities.length > 0 && !room.modalities.includes(study.modality_code)) {
+    return { hold: true, reasonCode: 'ROOM_MODALITY_NOT_ALLOWED', room: study.room };
+  }
+  return { hold: false, reasonCode: 'ROOM_OK', room: study.room };
 }
 
 /** Radiologists the destination has already rejected for this study are not offered to it again. */
@@ -272,6 +310,8 @@ function assess(r: CandidateRow, def: RuleSetDefinition, facts: Facts, units: nu
   if (rejected.has(r.radiologist_id)) reasons.push('REJECTED_BY_DESTINATION');
   if (!r.has_hospital) reasons.push('NO_HOSPITAL_PERMISSION');
   if (!r.has_privilege) reasons.push('NO_MODALITY_PRIVILEGE');
+  if (config.rotaRequired && !r.on_shift) reasons.push('NO_SHIFT');
+  if (r.absence) reasons.push(ABSENCE_REASON[r.absence] ?? 'ABSENT');
   if (r.status !== 'ready') reasons.push(`NOT_READY_${(r.status ?? 'unknown').toUpperCase()}`);
   else if (r.heartbeat_age_s === null || r.heartbeat_age_s > config.presenceStaleSeconds) reasons.push('PRESENCE_STALE');
   const capacity = r.capacity_units ?? 0;

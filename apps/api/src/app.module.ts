@@ -9,8 +9,11 @@ import {
   ErrorsController,
   IntegrationController,
   MastersController,
+  PasswordLinkController,
+  RotaController,
   RulesController,
   StudiesController,
+  UsersController,
 } from './app.controllers';
 import { AuthService } from './auth/auth.service';
 import { AuthGuard } from './auth/guard';
@@ -21,8 +24,10 @@ import { DatabaseModule, PG_POOL } from './database/database.module';
 import { ErrorsService } from './errors/errors.service';
 import { IntakeService } from './intake/intake.service';
 import { MastersService } from './masters/masters.service';
+import { RotaService } from './rota/rota.service';
 import { RulesService } from './rules/rules.service';
 import { StudiesService } from './studies/studies.service';
+import { UsersService } from './users/users.service';
 
 /** The services are plain classes so the worker and tests can use them without Nest. */
 const services = [
@@ -33,6 +38,8 @@ const services = [
   { provide: ErrorsService, deps: false },
   { provide: MastersService, deps: false },
   { provide: RulesService, deps: false },
+  { provide: RotaService, deps: false },
+  { provide: UsersService, deps: false },
 ].map(({ provide, deps }) => ({
   provide,
   inject: [PG_POOL, APP_CONFIG],
@@ -54,6 +61,9 @@ export class AppModule {
       imports: [configModule, DatabaseModule, ThrottlerModule.forRoot([{ ttl: 60_000, limit: 600 }])],
       controllers: [
         AuthController,
+        PasswordLinkController,
+        UsersController,
+        RotaController,
         IntegrationController,
         StudiesController,
         ErrorsController,

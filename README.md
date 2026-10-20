@@ -4,8 +4,9 @@ Teleradiology workflow orchestrator: HL7 orders come in from a source Mirth, ver
 team and a radiologist, the assignment is committed atomically, and an HL7 message goes out to a
 third-party Mirth with its acknowledgment tracked.
 
-This is the **Phase B foundation and first vertical slice** of the architecture plan
-(see [docs/phase-b-slice.md](docs/phase-b-slice.md) for what is built, what is stubbed and what comes next).
+This covers **Phase B** (foundation and first vertical slice) and **Phase C** (masters, rota and
+availability) of the architecture plan. See [docs/phase-b-slice.md](docs/phase-b-slice.md) and
+[docs/phase-c.md](docs/phase-c.md) for what is built, what is stubbed and what comes next.
 
 | Part | Where |
 |---|---|
@@ -39,8 +40,17 @@ pnpm dev:worker   # processes intake and delivers outbound HL7
 pnpm simulate     # fake source Mirth, third-party Mirth and workstation presence
 ```
 
-Open http://localhost:5173 and sign in as `admin@verdflow.local`. `pnpm simulate --orders 20 --reject-every 7`
-sends 20 orders and makes the fake destination reject every 7th assignment.
+Open http://localhost:5173 and sign in as `admin@verdflow.local`.
+
+Only radiologists on a rota shift receive new work. The seed gives every radiologist a 24-hour demo
+shift; run `pnpm db:seed` again the next day, add shifts on the Rota page, or set `ROTA_REQUIRED=false`
+in `.env` for a demo without a rota.
+
+To add people, use **Users**: VerdFlow creates a single-use set-password link (valid for 72 hours) for you
+to pass on. It never emails or shows passwords.
+
+`pnpm simulate --orders 20 --reject-every 7` sends 20 orders and makes the fake destination reject
+every 7th assignment.
 
 ## Tests
 

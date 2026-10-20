@@ -358,4 +358,81 @@ CREATE TABLE delivery_attempts (
 CREATE INDEX delivery_attempts_msg_idx ON delivery_attempts (outbound_message_id, attempt);
 `,
   },
+  {
+    version: 2,
+    name: 'rota_rooms_employees_users',
+    sql: /* sql */ `
+-- Employees: the organisational person. A radiologist is a clinical profile that may link to one.
+CREATE TABLE employees (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code text NOT NULL UNIQUE,
+  full_name text NOT NULL,
+  email text,
+  job_title text,
+  user_id uuid REFERENCES users(id),
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE radiologists ADD COLUMN employee_id uuid REFERENCES employees(id);
+
+-- Rooms, with the modalities they may perform and whether they are open.
+CREATE TABLE rooms (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  hospital_id uuid NOT NULL REFERENCES hospitals(id),
+  code text NOT NULL,
+  name text NOT NULL,
+  modalities text[] NOT NULL DEFAULT '{}',
+  status text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (hospital_id, code)
+);
+
+-- Rota. Times are UTC instants; the UI shows them in the viewer's time zone.
+-- Overlaps are refused by the application while it holds the radiologist's state-row lock.
+CREATE TABLE shifts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  radiologist_id uuid NOT NULL REFERENCES radiologists(id) ON DELETE CASCADE,
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz NOT NULL,
+  kind text NOT NULL DEFAULT 'reporting' CHECK (kind IN ('reporting', 'on_call')),
+  note text,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (ends_at > starts_at),
+  CHECK (ends_at - starts_at <= interval '36 hours')
+);
+CREATE INDEX shifts_radiologist_time_idx ON shifts (radiologist_id, starts_at);
+
+-- Leave and breaks. A break started "now" has no end until it is ended.
+CREATE TABLE absences (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  radiologist_id uuid NOT NULL REFERENCES radiologists(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('leave', 'break', 'training', 'other')),
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (ends_at IS NULL OR ends_at > starts_at)
+);
+CREATE INDEX absences_radiologist_time_idx ON absences (radiologist_id, starts_at);
+
+-- A study can now be held because of its room.
+ALTER TABLE evaluations DROP CONSTRAINT evaluations_outcome_check;
+ALTER TABLE evaluations ADD CONSTRAINT evaluations_outcome_check
+  CHECK (outcome IN ('assigned', 'no_eligible', 'no_route', 'no_rules', 'no_destination', 'room_hold'));
+
+-- Users are invited with a single-use set-password link; passwords are never sent or shown.
+CREATE TABLE password_links (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  revoked_at timestamptz,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

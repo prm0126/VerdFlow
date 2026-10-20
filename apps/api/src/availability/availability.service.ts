@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { audit } from '../audit/audit';
 import type { AppConfig } from '../config';
 import { many, one, withTransaction } from '../database/db';
+import { absenceNow, onShiftNow } from '../rota/rota.service';
 
 export interface AvailabilityRow {
   radiologist_id: string;
@@ -15,6 +16,11 @@ export interface AvailabilityRow {
   active_units: number;
   active_assignments: number;
   teams: string[];
+  on_shift: boolean;
+  absence: string | null;
+  shift_ends_at: string | null;
+  /** Why the radiologist cannot take new work now; empty when they can (capacity aside). */
+  blockers: string[];
 }
 
 export class AvailabilityService {
@@ -23,11 +29,13 @@ export class AvailabilityService {
     private readonly config: AppConfig,
   ) {}
 
-  list(): Promise<AvailabilityRow[]> {
-    return many<AvailabilityRow>(
+  async list(): Promise<AvailabilityRow[]> {
+    const rows = await many<Omit<AvailabilityRow, 'blockers'>>(
       this.pool,
       `SELECT r.id AS radiologist_id, r.code, r.full_name, st.status, st.heartbeat_at,
               (st.heartbeat_at IS NOT NULL AND st.heartbeat_at > now() - make_interval(secs => $1)) AS present,
+              ${onShiftNow('r.id')} AS on_shift, ${absenceNow('r.id')} AS absence,
+              (SELECT max(sh.ends_at) FROM shifts sh WHERE sh.radiologist_id = r.id AND sh.starts_at <= now() AND sh.ends_at > now()) AS shift_ends_at,
               st.capacity_units, st.active_units,
               (SELECT count(*)::int FROM assignments a WHERE a.radiologist_id = r.id AND a.status IN ('reserved','sent','delivered')) AS active_assignments,
               coalesce((SELECT array_agg(t.code ORDER BY t.code) FROM team_members tm JOIN teams t ON t.id = tm.team_id
@@ -38,6 +46,14 @@ export class AvailabilityService {
         ORDER BY r.full_name`,
       [this.config.presenceStaleSeconds],
     );
+    return rows.map((r) => {
+      const blockers: string[] = [];
+      if (this.config.rotaRequired && !r.on_shift) blockers.push('Not on shift');
+      if (r.absence) blockers.push(r.absence === 'break' ? 'On a break' : r.absence === 'leave' ? 'On leave' : r.absence === 'training' ? 'Training' : 'Absent');
+      if (r.status !== 'ready') blockers.push(`Status is ${r.status.replace(/_/g, ' ')}`);
+      else if (!r.present) blockers.push('No recent workstation heartbeat');
+      return { ...r, blockers };
+    });
   }
 
   /** A coordinator or the radiologist changes status. Locks the state row the allocation gate locks. */

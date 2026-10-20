@@ -33,7 +33,9 @@ import { ErrorsService } from './errors/errors.service';
 import { IntakeService } from './intake/intake.service';
 import { MasterError, MastersService, type MasterKind } from './masters/masters.service';
 import { RuleError, RulesService } from './rules/rules.service';
+import { RotaError, RotaService } from './rota/rota.service';
 import { Conflict, NotFound, StudiesService } from './studies/studies.service';
+import { UserError, UsersService } from './users/users.service';
 
 /** Maps service errors to HTTP responses with plain-English messages. */
 async function run<T>(fn: () => Promise<T>): Promise<T> {
@@ -43,6 +45,7 @@ async function run<T>(fn: () => Promise<T>): Promise<T> {
     if (err instanceof NotFound) throw new NotFoundException('Not found');
     if (err instanceof Conflict) throw new ConflictException(err.message);
     if (err instanceof MasterError) throw new BadRequestException({ message: err.message, issues: err.issues });
+    if (err instanceof RotaError || err instanceof UserError) throw new BadRequestException(err.message);
     if (err instanceof RuleError) {
       if (err.status === 404) throw new NotFoundException(err.message);
       if (err.status === 403) throw new ForbiddenException(err.message);
@@ -93,6 +96,106 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: SessionUser) {
     return { id: user.id, email: user.email, fullName: user.fullName, roles: user.roles, permissions: user.permissions };
+  }
+}
+
+/** Set-password links. Public: the single-use token is the credential. */
+@Controller('auth/password-link')
+export class PasswordLinkController {
+  constructor(private readonly users: UsersService) {}
+
+  @Public()
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Get(':token')
+  async check(@Param('token') token: string) {
+    const user = await this.users.checkLink(token);
+    if (!user) throw new NotFoundException('This link has expired or has already been used. Ask an administrator for a new one.');
+    return user;
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':token')
+  @HttpCode(200)
+  set(@Param('token') token: string, @Body() body: { password?: string }, @Req() req: Request) {
+    if (req.header('x-requested-with') !== 'verdflow') throw new ForbiddenException('Missing request header');
+    return run(() => this.users.setPassword(token, String(body?.password ?? ''), req.ip));
+  }
+}
+
+@Controller('users')
+export class UsersController {
+  constructor(private readonly users: UsersService) {}
+
+  @RequirePermission('users.manage')
+  @Get()
+  list() {
+    return this.users.list();
+  }
+
+  @RequirePermission('users.manage')
+  @Post()
+  create(@Body() body: unknown, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.users.create(body, user.id, req.ip));
+  }
+
+  @RequirePermission('users.manage')
+  @Put(':id')
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.users.update(id, body, user.id, req.ip));
+  }
+
+  @RequirePermission('users.manage')
+  @Post(':id/password-link')
+  @HttpCode(200)
+  link(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.users.newLink(id, user.id, req.ip));
+  }
+}
+
+@Controller('rota')
+export class RotaController {
+  constructor(private readonly rota: RotaService) {}
+
+  @RequirePermission('studies.view')
+  @Get()
+  week(@Query('from') from: string, @Query('to') to: string) {
+    return run(() => this.rota.week(from, to));
+  }
+
+  @RequirePermission('availability.manage')
+  @Post('shifts')
+  addShift(@Body() body: unknown, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.rota.addShift(body, user.id, req.ip));
+  }
+
+  @RequirePermission('availability.manage')
+  @Post('shifts/:id/delete')
+  @HttpCode(200)
+  deleteShift(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.rota.deleteShift(id, user.id, req.ip));
+  }
+
+  @RequirePermission('availability.manage')
+  @Post('absences')
+  addAbsence(@Body() body: unknown, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.rota.addAbsence(body, user.id, req.ip));
+  }
+
+  @RequirePermission('availability.manage')
+  @Post('absences/:id/end')
+  @HttpCode(200)
+  endAbsence(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.rota.endAbsence(id, user.id, req.ip));
+  }
+
+  @RequirePermission('availability.manage')
+  @Post('radiologists/:id/break')
+  @HttpCode(200)
+  breakAction(@Param('id', ParseUUIDPipe) id: string, @Body() body: { action?: string }, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    if (body?.action === 'start') return run(() => this.rota.startBreak(id, user.id, req.ip));
+    if (body?.action === 'end') return run(() => this.rota.endBreak(id, user.id, req.ip));
+    throw new BadRequestException('action must be start or end');
   }
 }
 
@@ -289,7 +392,7 @@ export class RulesController {
   }
 }
 
-const MASTER_KINDS: MasterKind[] = ['hospitals', 'modalities', 'services', 'teams', 'radiologists', 'partners'];
+const MASTER_KINDS: MasterKind[] = ['hospitals', 'rooms', 'modalities', 'services', 'teams', 'employees', 'radiologists', 'partners'];
 
 function masterKind(kind: string): MasterKind {
   if (!(MASTER_KINDS as string[]).includes(kind)) throw new NotFoundException('Not found');
