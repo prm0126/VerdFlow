@@ -17,6 +17,22 @@ interface StudyRow {
   patient_name: string | null;
   radiologist_name: string | null;
   team_code: string | null;
+  tat_state: string | null;
+  tat_due_at: string | null;
+}
+
+/** Turnaround status: text and colour, with the due time. */
+function Tat({ s }: { s: StudyRow }) {
+  if (!s.tat_state) return <span className="muted">—</span>;
+  const due = s.tat_due_at ? new Date(s.tat_due_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+  const label = s.tat_state === 'breached' ? 'Overdue' : s.tat_state === 'warning' ? 'At risk' : 'On time';
+  const tone = s.tat_state === 'breached' ? 'bad' : s.tat_state === 'warning' ? 'warn' : 'good';
+  return (
+    <>
+      <span className={`badge ${tone}`}>{label}</span>
+      {due && <div className="small muted">due {due}</div>}
+    </>
+  );
 }
 
 export function Studies() {
@@ -63,6 +79,7 @@ export function Studies() {
             <th>Study</th>
             <th>Priority</th>
             <th>Team / radiologist</th>
+            <th>Turnaround</th>
             <th>State</th>
           </tr>
         </thead>
@@ -84,6 +101,9 @@ export function Studies() {
                 {s.radiologist_name && <div className="small muted">{s.radiologist_name}</div>}
               </td>
               <td>
+                <Tat s={s} />
+              </td>
+              <td>
                 <State value={s.state} />
                 {s.state_reason && (
                   <div>
@@ -95,7 +115,7 @@ export function Studies() {
           ))}
           {data?.length === 0 && (
             <tr>
-              <td colSpan={8} className="muted">
+              <td colSpan={9} className="muted">
                 No studies match.
               </td>
             </tr>

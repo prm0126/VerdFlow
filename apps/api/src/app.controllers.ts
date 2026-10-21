@@ -36,6 +36,9 @@ import { RuleError, RulesService } from './rules/rules.service';
 import { RotaError, RotaService } from './rota/rota.service';
 import { Conflict, NotFound, StudiesService } from './studies/studies.service';
 import { UserError, UsersService } from './users/users.service';
+import { VettingService } from './vetting/vetting.service';
+import { PeerReviewService } from './workflow/peer-review';
+import { EscalationsService } from './workflow/timers';
 
 /** Maps service errors to HTTP responses with plain-English messages. */
 async function run<T>(fn: () => Promise<T>): Promise<T> {
@@ -224,6 +227,7 @@ export class IntegrationController {
   async presence(@Req() req: Request, @Body() body: unknown) {
     const partner = await this.intake.authenticate(bearer(req));
     if (!partner) throw new UnauthorizedException('Not authorised');
+    if (partner.role !== 'presence') throw new ForbiddenException('This partner may not send presence');
     const parsed = z.object({ radiologistCodes: z.array(z.string().max(30)).max(1000) }).safeParse(body);
     if (!parsed.success) throw new BadRequestException('radiologistCodes must be a list of codes');
     return this.availability.heartbeat(parsed.data.radiologistCodes);
@@ -269,6 +273,13 @@ export class StudiesController {
   @HttpCode(200)
   reallocate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SessionUser, @Req() req: Request) {
     return run(() => this.studies.reallocate(id, user.id, req.ip));
+  }
+
+  @RequirePermission('errors.manage')
+  @Post('studies/:id/reassign')
+  @HttpCode(200)
+  reassign(@Param('id', ParseUUIDPipe) id: string, @Body() body: { reason?: string }, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.studies.reassign(id, String(body?.reason ?? ''), user.id, req.ip));
   }
 
   @RequirePermission('errors.manage')
@@ -438,5 +449,65 @@ export class AuditController {
         ORDER BY a.id DESC LIMIT 300`,
       [entityId?.slice(0, 100) || null],
     );
+  }
+}
+
+@Controller('vetting')
+export class VettingController {
+  constructor(private readonly vetting: VettingService) {}
+
+  @RequirePermission('vetting.perform')
+  @Get()
+  list() {
+    return this.vetting.list();
+  }
+
+  @RequirePermission('vetting.perform')
+  @Post(':studyId')
+  @HttpCode(200)
+  decide(@Param('studyId', ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.vetting.decide(id, body, user.id, req.ip));
+  }
+}
+
+@Controller('escalations')
+export class EscalationsController {
+  constructor(private readonly escalations: EscalationsService) {}
+
+  @RequirePermission('studies.view')
+  @Get()
+  list(@Query('all') all?: string) {
+    return this.escalations.list(all === 'true');
+  }
+
+  @RequirePermission('escalations.manage')
+  @Post(':id/acknowledge')
+  @HttpCode(200)
+  acknowledge(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.escalations.acknowledge(id, user.id, req.ip));
+  }
+}
+
+@Controller('peer-review')
+export class PeerReviewController {
+  constructor(private readonly reviews: PeerReviewService) {}
+
+  @RequirePermission('studies.view')
+  @Get()
+  list(@Query('mine') mine: string | undefined, @Query('status') status: string | undefined, @CurrentUser() user: SessionUser) {
+    return this.reviews.list({ mine: mine === 'true' ? user.id : undefined, status: status || undefined });
+  }
+
+  @RequirePermission('studies.view')
+  @Get('summary')
+  summary() {
+    return this.reviews.summary();
+  }
+
+  @RequirePermission('review.perform')
+  @Post(':id')
+  @HttpCode(200)
+  complete(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.reviews.complete(id, body, user.id, req.ip));
   }
 }

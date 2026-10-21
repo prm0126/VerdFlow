@@ -85,6 +85,8 @@ const KINDS: Record<string, { title: string; fields: Field[] }> = {
       { key: 'name', label: 'Name', type: 'text' },
       { key: 'modalityCode', label: 'Modality', type: 'text' },
       { key: 'workUnits', label: 'Work units (overrides modality)', type: 'number' },
+      { key: 'requiresVetting', label: 'Needs vetting', type: 'bool' },
+      { key: 'vettingProtocols', label: 'Vetting protocols', type: 'list' },
       { key: 'active', label: 'Active', type: 'bool' },
     ],
   },
@@ -94,6 +96,7 @@ const KINDS: Record<string, { title: string; fields: Field[] }> = {
       { key: 'code', label: 'Code', type: 'text', createOnly: true },
       { key: 'name', label: 'Name', type: 'text' },
       { key: 'direction', label: 'Direction', type: 'select', options: ['inbound', 'outbound'], createOnly: true },
+      { key: 'role', label: 'Sends (inbound)', type: 'select', options: ['source', 'reporting', 'presence'] },
       { key: 'allowedFacilities', label: 'Allowed sending facilities (inbound)', type: 'list' },
       { key: 'endpointUrl', label: 'Endpoint URL (outbound)', type: 'text' },
       { key: 'receivingApplication', label: 'Receiving application (MSH-5)', type: 'text' },
@@ -115,7 +118,7 @@ function cell(v: unknown) {
 function Form({ kind, initial, onDone }: { kind: string; initial: Rec | null; onDone: (msg?: string) => void }) {
   const spec = KINDS[kind];
   const [rec, setRec] = useState<Rec>(
-    initial ?? { active: true, ...(kind === 'partners' ? { direction: 'inbound', timeoutMs: 10000 } : {}), ...(kind === 'rooms' ? { status: 'open' } : {}) },
+    initial ?? { active: true, ...(kind === 'partners' ? { direction: 'inbound', role: 'source', timeoutMs: 10000 } : {}), ...(kind === 'rooms' ? { status: 'open' } : {}) },
   );
   const [err, setErr] = useState<{ message: string; issues: string[] } | null>(null);
   const save = async () => {

@@ -4,9 +4,10 @@ Teleradiology workflow orchestrator: HL7 orders come in from a source Mirth, ver
 team and a radiologist, the assignment is committed atomically, and an HL7 message goes out to a
 third-party Mirth with its acknowledgment tracked.
 
-This covers **Phase B** (foundation and first vertical slice) and **Phase C** (masters, rota and
-availability) of the architecture plan. See [docs/phase-b-slice.md](docs/phase-b-slice.md) and
-[docs/phase-c.md](docs/phase-c.md) for what is built, what is stubbed and what comes next.
+This covers **Phase B** (foundation and first vertical slice), **Phase C** (masters, rota and
+availability) and **Phase D** (vetting, reporting lifecycle, turnaround timers, escalations, peer review)
+of the architecture plan. See [docs/phase-b-slice.md](docs/phase-b-slice.md), [docs/phase-c.md](docs/phase-c.md)
+and [docs/phase-d.md](docs/phase-d.md) for what is built, what is stubbed and what comes next.
 
 | Part | Where |
 |---|---|
@@ -49,8 +50,12 @@ in `.env` for a demo without a rota.
 To add people, use **Users**: VerdFlow creates a single-use set-password link (valid for 72 hours) for you
 to pass on. It never emails or shows passwords.
 
-`pnpm simulate --orders 20 --reject-every 7` sends 20 orders and makes the fake destination reject
-every 7th assignment.
+The simulator also plays the reporting radiologist: it accepts each assignment, then sends a preliminary
+and a final report. Options: `--orders 20` sends 20 orders, `--reject-every 7` makes the destination
+reject every 7th assignment, `--decline-every 4` makes the radiologist decline every 4th, and
+`--report-seconds 20` sets how long reporting takes. MR brain needs vetting in the demo data: approve
+it on the Vetting page. Sign in as `radiologist@verdflow.local` (Dr Asha Patel) to vet and to record
+peer reviews.
 
 ## Tests
 

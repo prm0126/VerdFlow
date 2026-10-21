@@ -3,7 +3,7 @@ import { audit } from '../audit/audit';
 import type { AppConfig } from '../config';
 import { many, one, withTransaction } from '../database/db';
 import { allocate, lockStudy } from '../processing/allocator';
-import { cancelStudy } from '../processing/processor';
+import { cancelStudy, withdrawAssignment } from '../processing/processor';
 
 export class NotFound extends Error {}
 export class Conflict extends Error {}
@@ -40,7 +40,17 @@ export class StudiesService {
          (SELECT count(*)::int FROM outbound_messages WHERE status = 'unknown') AS outbound_uncertain,
          (SELECT count(*)::int FROM outbound_messages WHERE status IN ('failed', 'rejected')) AS outbound_failed,
          (SELECT count(*)::int FROM radiologist_state WHERE status = 'ready'
-             AND heartbeat_at > now() - make_interval(secs => $1)) AS radiologists_ready`,
+             AND heartbeat_at > now() - make_interval(secs => $1)) AS radiologists_ready,
+         (SELECT count(*)::int FROM studies WHERE state = 'awaiting_vetting') AS awaiting_vetting,
+         (SELECT count(*)::int FROM studies WHERE state IN ('assigned', 'preliminary')) AS reporting,
+         (SELECT count(*)::int FROM studies WHERE state = 'finalized' AND finalized_at > now() - interval '24 hours') AS finalized_24h,
+         (SELECT count(*)::int FROM escalations WHERE resolved_at IS NULL) AS escalations_open,
+         (SELECT count(*)::int FROM escalations WHERE resolved_at IS NULL AND acknowledged_at IS NULL) AS escalations_unacknowledged,
+         (SELECT count(*)::int FROM tat_clocks WHERE state = 'breached') AS tat_overdue,
+         (SELECT count(*)::int FROM tat_clocks WHERE state = 'warning') AS tat_at_risk,
+         (SELECT count(*)::int FROM tat_clocks WHERE state IN ('met', 'met_late') AND stopped_at > now() - interval '24 hours') AS tat_closed_24h,
+         (SELECT count(*)::int FROM tat_clocks WHERE state = 'met_late' AND stopped_at > now() - interval '24 hours') AS tat_late_24h,
+         (SELECT count(*)::int FROM peer_review_tasks WHERE status = 'open') AS reviews_open`,
       [this.config.presenceStaleSeconds],
     );
     const continuity = await one<{ preserved: number; broken: number }>(
@@ -62,12 +72,20 @@ export class StudiesService {
       this.pool,
       `SELECT s.id, s.accession, h.code AS hospital_code, s.modality_code, s.service_code, s.service_text, s.priority, s.state,
               s.state_reason, s.created_at, s.updated_at, p.display_name AS patient_name,
-              r.full_name AS radiologist_name, a.team_code, a.status AS assignment_status
+              r.full_name AS radiologist_name, a.team_code, a.status AS assignment_status,
+              tat.state AS tat_state, tat.due_at AS tat_due_at, tat.interval_code AS tat_interval
          FROM studies s
          JOIN hospitals h ON h.id = s.hospital_id
          JOIN patients p ON p.id = s.patient_id
-         LEFT JOIN LATERAL (SELECT * FROM assignments x WHERE x.study_id = s.id ORDER BY x.version DESC LIMIT 1) a ON true
+         -- the radiologist who has the study now, or who reported it; not one who declined or was replaced
+         LEFT JOIN LATERAL (SELECT * FROM assignments x WHERE x.study_id = s.id
+                             AND x.status IN ('reserved', 'sent', 'delivered', 'accepted', 'completed')
+                             ORDER BY x.version DESC LIMIT 1) a ON true
          LEFT JOIN radiologists r ON r.id = a.radiologist_id
+         -- the most urgent open clock: overdue, then at risk, then soonest due
+         LEFT JOIN LATERAL (SELECT c.state, c.due_at, c.interval_code FROM tat_clocks c
+                             WHERE c.study_id = s.id AND c.stopped_at IS NULL
+                             ORDER BY CASE c.state WHEN 'breached' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, c.due_at LIMIT 1) tat ON true
         WHERE ($1::text IS NULL OR s.state = $1)
           AND ($2::text IS NULL OR s.accession ILIKE '%' || $2 || '%')
         ORDER BY s.created_at DESC
@@ -87,7 +105,7 @@ export class StudiesService {
       [id],
     );
     if (!study) throw new NotFound();
-    const [events, evaluations, assignments, outbound, intake] = await Promise.all([
+    const [events, evaluations, assignments, outbound, intake, clocks, escalations, review] = await Promise.all([
       many(this.pool, `SELECT id, kind, detail, created_at FROM study_events WHERE study_id = $1 ORDER BY id`, [id]),
       many(
         this.pool,
@@ -122,6 +140,24 @@ export class StudiesService {
           ORDER BY m.received_at`,
         [id],
       ),
+      many(
+        this.pool,
+        `SELECT interval_code, rule_set_version, target_minutes, started_at, warn_at, due_at, stopped_at, state
+           FROM tat_clocks WHERE study_id = $1 ORDER BY started_at, interval_code`,
+        [id],
+      ),
+      many(
+        this.pool,
+        `SELECT e.id, e.kind, e.reason_code, e.raised_at, e.acknowledged_at, u.full_name AS acknowledged_by_name, e.resolved_at, e.resolution
+           FROM escalations e LEFT JOIN users u ON u.id = e.acknowledged_by WHERE e.study_id = $1 ORDER BY e.raised_at`,
+        [id],
+      ),
+      one(
+        this.pool,
+        `SELECT t.id, t.status, t.skip_reason, t.outcome, t.comment, t.created_at, t.completed_at, rev.full_name AS reviewer_name
+           FROM peer_review_tasks t LEFT JOIN radiologists rev ON rev.id = t.reviewer_id WHERE t.study_id = $1`,
+        [id],
+      ),
     ]);
     return {
       ...study,
@@ -132,6 +168,9 @@ export class StudiesService {
       assignments,
       outbound,
       intake,
+      clocks,
+      escalations,
+      review,
     };
   }
 
@@ -153,10 +192,37 @@ export class StudiesService {
       const study = await lockStudy(client, id).catch(() => null);
       if (!study) throw new NotFound();
       if (study.state !== 'manual_review' && study.state !== 'ready') throw new Conflict('Only a study waiting for a coordinator can be re-routed');
-      const active = await one(client, `SELECT 1 FROM assignments WHERE study_id = $1 AND status IN ('reserved','sent','delivered')`, [id]);
+      const active = await one(client, `SELECT 1 FROM assignments WHERE study_id = $1 AND status IN ('reserved','sent','delivered','accepted')`, [id]);
       if (active) throw new Conflict('This study still has an active assignment');
       const result = await allocate(client, study, this.config);
       await audit(client, { actorType: 'user', actorId: userId, action: 'study.reallocated', entityType: 'study', entityId: id, detail: { ...result }, ip });
+      return result;
+    });
+  }
+
+  /**
+   * Takes a study back from its radiologist before a report exists and routes it again, never to the
+   * same person. The destination is told if it may already have the assignment.
+   */
+  async reassign(id: string, reason: string, userId: string, ip?: string) {
+    if (!reason?.trim()) throw new Conflict('A reason is required');
+    return withTransaction(this.pool, async (client) => {
+      const s = await one<{ issuer: string; accession: string }>(client, 'SELECT issuer, accession FROM studies WHERE id = $1', [id]);
+      if (!s) throw new NotFound();
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 7))', [`${s.issuer}|${s.accession}`]);
+      const study = await lockStudy(client, id);
+      if (!['reserved', 'awaiting_acceptance', 'assigned'].includes(study.state)) {
+        throw new Conflict('Only a study that is assigned but not yet reported can be reassigned');
+      }
+      const assignmentId = await withdrawAssignment(client, study, 'released', 'COORDINATOR_REASSIGNED');
+      await client.query(`UPDATE studies SET state = 'ready', state_reason = NULL, version = version + 1, updated_at = now() WHERE id = $1`, [id]);
+      await client.query(`INSERT INTO study_events (study_id, kind, detail, actor_id) VALUES ($1, 'reassigned', $2, $3)`, [
+        id,
+        JSON.stringify({ reason: reason.slice(0, 500), assignmentId }),
+        userId,
+      ]);
+      const result = await allocate(client, await lockStudy(client, id), this.config);
+      await audit(client, { actorType: 'user', actorId: userId, action: 'study.reassigned', entityType: 'study', entityId: id, detail: { reason: reason.slice(0, 500), assignmentId, outcome: result.outcome }, ip });
       return result;
     });
   }
@@ -167,6 +233,7 @@ export class StudiesService {
       const s = await one<{ state: string }>(client, 'SELECT state FROM studies WHERE id = $1 FOR UPDATE', [id]);
       if (!s) throw new NotFound();
       if (s.state === 'cancelled') throw new Conflict('The study is already cancelled');
+      if (s.state === 'finalized' || s.state === 'vetting_rejected') throw new Conflict('A finished study cannot be cancelled');
       await cancelStudy(client, id, null, 'COORDINATOR_CANCELLED');
       await audit(client, { actorType: 'user', actorId: userId, action: 'study.cancelled', entityType: 'study', entityId: id, detail: { reason: reason.slice(0, 500) }, ip });
       return { ok: true };

@@ -1,15 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
-import { buildAck, hl7Timestamp, parseHl7, readMsh } from '@vf/shared';
+import { buildAck, buildLifecycleMessage, get, hl7Timestamp, parseHl7, readMsh, type LifecycleEvent } from '@vf/shared';
 
 /**
  * Local stand-ins for the systems around VerdFlow, for development only:
- *  - a third-party Mirth that receives assignments on :4100 and returns AA acknowledgments,
+ *  - a third-party Mirth that receives assignments on :4100 and returns AA acknowledgments, then
+ *    plays the radiologist: accepts, sends a preliminary and then a final report (or declines),
  *  - a reporting-workstation presence feed that heartbeats every radiologist every 15 seconds,
  *  - a source Mirth that sends sample ORM^O01 orders (including two studies for one patient).
  *
- * Usage: pnpm simulate [--orders N] [--reject-every N]
+ * Usage: pnpm simulate [--orders N] [--reject-every N] [--decline-every N] [--report-seconds N]
  */
 const api = process.env.VERDFLOW_API ?? 'http://localhost:4000/api';
 const keys = JSON.parse(readFileSync(resolve(__dirname, '../../../../.dev-keys.json'), 'utf8')) as Record<string, string>;
@@ -20,6 +21,8 @@ const flag = (name: string, fallback: number) => {
 };
 const orders = flag('--orders', 6);
 const rejectEvery = flag('--reject-every', 0);
+const declineEvery = flag('--decline-every', 0);
+const reportSeconds = flag('--report-seconds', 20);
 
 const seen = new Set<string>();
 let received = 0;
@@ -28,7 +31,8 @@ createServer((req, res) => {
   req.on('data', (c) => (body += c));
   req.on('end', () => {
     try {
-      const msh = readMsh(parseHl7(body));
+      const msg = parseHl7(body);
+      const msh = readMsh(msg);
       const repeat = seen.has(msh.controlId ?? '');
       seen.add(msh.controlId ?? '');
       received++;
@@ -36,11 +40,40 @@ createServer((req, res) => {
       console.log(`[third-party mirth] ${repeat ? 'repeat of' : 'received'} ${msh.controlId} → ${reject ? 'AE' : 'AA'}`);
       res.writeHead(200, { 'content-type': 'x-application/hl7-v2+er7' });
       res.end(buildAck(msh, reject ? 'AE' : 'AA', `TP${Date.now()}`, reject ? 'Radiologist not known here' : undefined));
+      if (!repeat && !reject && get(msg, 'ORC', 1) === 'XO') playRadiologist(msg);
     } catch {
       res.writeHead(400).end();
     }
   });
 }).listen(4100, 'localhost', () => console.log('[third-party mirth] listening on http://localhost:4100/hl7'));
+
+let assignments = 0;
+let lifecycleSeq = 0;
+/** Accept (or decline), then preliminary, then final, spread over --report-seconds. */
+function playRadiologist(msg: ReturnType<typeof parseHl7>) {
+  const base = { assignmentId: get(msg, 'ZAS', 1)!, assignmentVersion: Number(get(msg, 'ZAS', 2)), accession: get(msg, 'OBR', 18)! };
+  const decline = declineEvery > 0 && ++assignments % declineEvery === 0;
+  const send = async (kind: LifecycleEvent['kind'], reason?: string) => {
+    try {
+      const r = await fetch(`${api}/integration/hl7`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${keys['key:REPORTING_RETURN']}`, 'content-type': 'x-application/hl7-v2+er7' },
+        body: buildLifecycleMessage({ ...base, kind, reason, controlId: `RPT${Date.now()}-${++lifecycleSeq}`, sendingFacility: 'TELERAD' }),
+      });
+      console.log(`[radiologist] ${kind} ${base.accession} → HTTP ${r.status}`);
+    } catch (err) {
+      console.log(`[radiologist] API not reachable: ${(err as Error).message}`);
+    }
+  };
+  const step = (reportSeconds * 1000) / 4;
+  if (decline) {
+    setTimeout(() => send('declined', 'Outside my subspecialty'), step);
+    return;
+  }
+  setTimeout(() => send('accepted'), step);
+  setTimeout(() => send('preliminary'), step * 2);
+  setTimeout(() => send('final'), step * 4);
+}
 
 const radiologists = ['R001', 'R002', 'R003', 'R004', 'R005', 'R006'];
 async function heartbeat() {

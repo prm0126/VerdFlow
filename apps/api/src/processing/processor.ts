@@ -1,9 +1,11 @@
-import { Hl7ParseError, parseHl7, toCanonicalOrder, type CanonicalOrder } from '@vf/shared';
+import { Hl7ParseError, isLifecycleMessage, parseHl7, toCanonicalOrder, toLifecycleEvent, type CanonicalOrder, type Hl7Message } from '@vf/shared';
 import type { Pool, PoolClient } from 'pg';
 import type { AppConfig } from '../config';
 import { isTransientDbError, one, withTransaction } from '../database/db';
-import { allocate, enqueueOutbound, lockStudy } from './allocator';
+import { allocate, enqueueOutbound, lockStudy, type StudyRow } from './allocator';
 import { releaseCapacity } from '../availability/capacity';
+import { cancelClocks, recordMilestone } from '../workflow/milestones';
+import { maybeCreateReview } from '../workflow/peer-review';
 
 /** Raised when a message cannot be processed yet (for example a cancel before its order) and should be retried. */
 export class RetryLater extends Error {
@@ -26,6 +28,7 @@ interface IntakeRow {
   id: string;
   payload: string;
   attempts: number;
+  partner_role: 'source' | 'reporting' | 'presence';
 }
 
 export type ProcessResult = { id: string; status: 'processed' | 'ignored' | 'quarantined' | 'retry'; reasonCode?: string; studyId?: string };
@@ -45,7 +48,8 @@ export class Processor {
       return await withTransaction(this.pool, async (client) => {
         claimed = await one<IntakeRow>(
           client,
-          `SELECT m.id, m.payload, m.attempts FROM intake_messages m
+          `SELECT m.id, m.payload, m.attempts, p.role AS partner_role
+             FROM intake_messages m JOIN integration_partners p ON p.id = m.partner_id
             WHERE m.status = 'received' AND m.next_attempt_at <= now()
               AND (m.ordering_key IS NULL OR NOT EXISTS (
                     SELECT 1 FROM intake_messages p
@@ -53,7 +57,7 @@ export class Processor {
                        AND (p.received_at, p.id) < (m.received_at, m.id)))
             ORDER BY m.received_at, m.id
             LIMIT 1
-            FOR UPDATE SKIP LOCKED`,
+            FOR UPDATE OF m SKIP LOCKED`,
         );
         if (!claimed) return null;
         // Savepoint so a permanent failure can roll back partial work but still record the quarantine.
@@ -98,8 +102,15 @@ export class Processor {
 
   private async handle(client: PoolClient, m: IntakeRow): Promise<Omit<ProcessResult, 'id'>> {
     let order: CanonicalOrder;
+    let msg: Hl7Message;
     try {
-      order = toCanonicalOrder(parseHl7(m.payload));
+      msg = parseHl7(m.payload);
+      if (isLifecycleMessage(msg)) {
+        if (m.partner_role !== 'reporting') throw new Quarantine('PARTNER_ROLE_NOT_ALLOWED', 'Only a reporting partner may send acceptance and report events');
+        return await this.handleLifecycle(client, m, msg);
+      }
+      if (m.partner_role !== 'source') throw new Quarantine('PARTNER_ROLE_NOT_ALLOWED', 'Only a source partner may send orders');
+      order = toCanonicalOrder(msg);
     } catch (err) {
       if (err instanceof Hl7ParseError) throw new Quarantine(err.code, err.message);
       throw err;
@@ -154,14 +165,22 @@ export class Processor {
       );
       await event(client, study!.id, m.id, 'order_received', { priority: order.priority });
       const row = await lockStudy(client, study!.id);
+      await recordMilestone(client, study!.id, 'received');
+      const vetting = await one(client, 'SELECT 1 FROM services WHERE code = $1 AND active AND requires_vetting', [order.serviceCode]);
+      if (vetting) {
+        await client.query(`UPDATE studies SET state = 'awaiting_vetting', version = version + 1 WHERE id = $1`, [study!.id]);
+        await event(client, study!.id, null, 'awaiting_vetting', { serviceCode: order.serviceCode });
+        return { status: 'processed', reasonCode: 'AWAITING_VETTING', studyId: study!.id };
+      }
+      await recordMilestone(client, study!.id, 'ready');
       const result = await allocate(client, row, this.config);
       return { status: 'processed', reasonCode: result.reasonCode, studyId: study!.id };
     }
 
     if (!existing) throw new RetryLater(order.orderControl === 'CA' ? 'CANCEL_FOR_UNKNOWN_STUDY' : 'UPDATE_FOR_UNKNOWN_STUDY');
-    if (existing.state === 'cancelled') {
-      await event(client, existing.id, m.id, 'stale_message', { orderControl: order.orderControl });
-      return { status: 'ignored', reasonCode: 'STUDY_ALREADY_CANCELLED', studyId: existing.id };
+    if (CLOSED_STATES.has(existing.state)) {
+      await event(client, existing.id, m.id, 'stale_message', { orderControl: order.orderControl, state: existing.state });
+      return { status: 'ignored', reasonCode: `STUDY_ALREADY_${existing.state.toUpperCase()}`, studyId: existing.id };
     }
 
     if (order.orderControl === 'XO') {
@@ -177,6 +196,77 @@ export class Processor {
     await cancelStudy(client, existing.id, m.id, 'SOURCE_CANCELLED');
     return { status: 'processed', reasonCode: 'ORDER_CANCELLED', studyId: existing.id };
   }
+
+  /**
+   * Acceptance, decline, preliminary and final events from the reporting side. They must name the
+   * current assignment and version; an event for an older or ended assignment is ignored, never applied.
+   */
+  private async handleLifecycle(client: PoolClient, m: IntakeRow, msg: Hl7Message): Promise<Omit<ProcessResult, 'id'>> {
+    const e = toLifecycleEvent(msg);
+    const a = await one<{ id: string; study_id: string; version: number; status: string; radiologist_id: string; work_units: number; issuer: string; accession: string }>(
+      client,
+      `SELECT a.id, a.study_id, a.version, a.status, a.radiologist_id, a.work_units, s.issuer, s.accession
+         FROM assignments a JOIN studies s ON s.id = a.study_id WHERE a.id = $1`,
+      [e.assignmentId],
+    );
+    if (!a) throw new Quarantine('UNKNOWN_ASSIGNMENT', `No assignment ${e.assignmentId}`);
+    if (a.accession !== e.accession) throw new Quarantine('ASSIGNMENT_ACCESSION_MISMATCH', `Assignment ${e.assignmentId} is for ${a.accession}, not ${e.accession}`);
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 7))', [`${a.issuer}|${a.accession}`]);
+    const study = await lockStudy(client, a.study_id);
+    const current = await one<{ status: string }>(client, 'SELECT status FROM assignments WHERE id = $1 FOR UPDATE', [a.id]);
+    const ignore = async (reasonCode: string) => {
+      await event(client, a.study_id, m.id, 'lifecycle_ignored', { kind: e.kind, reasonCode, assignmentId: a.id });
+      return { status: 'ignored' as const, reasonCode, studyId: a.study_id };
+    };
+    if (e.assignmentVersion !== a.version) return ignore('STALE_ASSIGNMENT_VERSION');
+    if (!['sent', 'delivered', 'accepted'].includes(current!.status)) return ignore(`ASSIGNMENT_${current!.status.toUpperCase()}`);
+    if (CLOSED_STATES.has(study.state)) return ignore(`STUDY_ALREADY_${study.state.toUpperCase()}`);
+
+    switch (e.kind) {
+      case 'accepted': {
+        if (current!.status === 'accepted') return ignore('ALREADY_ACCEPTED');
+        await client.query(`UPDATE assignments SET status = 'accepted' WHERE id = $1`, [a.id]);
+        await setState(client, a.study_id, 'assigned');
+        await recordMilestone(client, a.study_id, 'accepted');
+        await event(client, a.study_id, m.id, 'radiologist_accepted', { assignmentId: a.id });
+        return { status: 'processed', reasonCode: 'ACCEPTED', studyId: a.study_id };
+      }
+      case 'declined': {
+        if (study.state === 'preliminary') return ignore('DECLINE_AFTER_PRELIMINARY');
+        await client.query(`UPDATE assignments SET status = 'declined', ended_at = now(), end_reason = 'RADIOLOGIST_DECLINED' WHERE id = $1`, [a.id]);
+        await releaseCapacity(client, a.radiologist_id, a.work_units);
+        await event(client, a.study_id, m.id, 'radiologist_declined', { assignmentId: a.id, reason: e.reason ?? null });
+        await setState(client, a.study_id, 'ready');
+        // Route again straight away, never to the radiologist who declined.
+        const result = await allocate(client, await lockStudy(client, a.study_id), this.config);
+        return { status: 'processed', reasonCode: `DECLINED_${result.outcome.toUpperCase()}`, studyId: a.study_id };
+      }
+      case 'preliminary': {
+        if (study.state === 'preliminary') return ignore('ALREADY_PRELIMINARY');
+        await setState(client, a.study_id, 'preliminary');
+        await recordMilestone(client, a.study_id, 'preliminary');
+        await event(client, a.study_id, m.id, 'preliminary_report', { assignmentId: a.id });
+        return { status: 'processed', reasonCode: 'PRELIMINARY', studyId: a.study_id };
+      }
+      case 'final': {
+        await client.query(`UPDATE assignments SET status = 'completed', ended_at = now(), end_reason = 'REPORT_FINAL' WHERE id = $1`, [a.id]);
+        await releaseCapacity(client, a.radiologist_id, a.work_units);
+        await client.query(`UPDATE studies SET reported_by = $2 WHERE id = $1`, [a.study_id, a.radiologist_id]);
+        await setState(client, a.study_id, 'finalized');
+        await recordMilestone(client, a.study_id, 'final');
+        await event(client, a.study_id, m.id, 'final_report', { assignmentId: a.id });
+        const review = await maybeCreateReview(client, a.study_id, a.radiologist_id);
+        return { status: 'processed', reasonCode: `FINAL_REVIEW_${review.toUpperCase()}`, studyId: a.study_id };
+      }
+    }
+  }
+}
+
+/** States after which no order or lifecycle message changes the study. */
+const CLOSED_STATES = new Set(['cancelled', 'finalized', 'vetting_rejected']);
+
+async function setState(client: PoolClient, studyId: string, state: string) {
+  await client.query(`UPDATE studies SET state = $2, state_reason = NULL, version = version + 1, updated_at = now() WHERE id = $1`, [studyId, state]);
 }
 
 /**
@@ -185,10 +275,26 @@ export class Processor {
  */
 export async function cancelStudy(client: PoolClient, studyId: string, intakeMessageId: string | null, reason: string): Promise<void> {
   const study = await lockStudy(client, studyId);
+  const assignmentId = await withdrawAssignment(client, study, 'cancelled', reason);
+  await client.query(
+    `UPDATE studies SET state = 'cancelled', state_reason = $2, version = version + 1, updated_at = now() WHERE id = $1`,
+    [studyId, reason],
+  );
+  await cancelClocks(client, studyId, 'Study cancelled');
+  await event(client, studyId, intakeMessageId, 'cancelled', { reason, assignmentId });
+}
+
+/**
+ * Ends the study's active assignment and returns its capacity. An unsent assignment is withdrawn; one
+ * that may already have reached the destination gets a cancellation message, never a silent release.
+ * The caller holds the study lock. Returns the assignment ID, or null when there was none.
+ */
+export async function withdrawAssignment(client: PoolClient, study: StudyRow, status: 'cancelled' | 'released', reason: string): Promise<string | null> {
+  const studyId = study.id;
   const active = await one<{ id: string; radiologist_id: string; version: number; work_units: number; team_code: string }>(
     client,
     `SELECT id, radiologist_id, version, work_units, team_code FROM assignments
-      WHERE study_id = $1 AND purpose = 'primary' AND status IN ('reserved', 'sent', 'delivered') FOR UPDATE`,
+      WHERE study_id = $1 AND purpose = 'primary' AND status IN ('reserved', 'sent', 'delivered', 'accepted') FOR UPDATE`,
     [studyId],
   );
   if (active) {
@@ -198,7 +304,7 @@ export async function cancelStudy(client: PoolClient, studyId: string, intakeMes
         WHERE assignment_id = $1 AND kind = 'assignment' FOR UPDATE`,
       [active.id],
     );
-    await client.query(`UPDATE assignments SET status = 'cancelled', ended_at = now(), end_reason = $2 WHERE id = $1`, [active.id, reason]);
+    await client.query(`UPDATE assignments SET status = $3, ended_at = now(), end_reason = $2 WHERE id = $1`, [active.id, reason, status]);
     await releaseCapacity(client, active.radiologist_id, active.work_units);
     const unsent = out && !out.possibly_delivered && (out.status === 'pending' || out.status === 'retry');
     if (out && unsent) {
@@ -233,11 +339,7 @@ export async function cancelStudy(client: PoolClient, studyId: string, intakeMes
       });
     }
   }
-  await client.query(
-    `UPDATE studies SET state = 'cancelled', state_reason = $2, version = version + 1, updated_at = now() WHERE id = $1`,
-    [studyId, reason],
-  );
-  await event(client, studyId, intakeMessageId, 'cancelled', { reason, assignmentId: active?.id ?? null });
+  return active?.id ?? null;
 }
 
 async function event(client: PoolClient, studyId: string, intakeMessageId: string | null, kind: string, detail: Record<string, unknown>) {

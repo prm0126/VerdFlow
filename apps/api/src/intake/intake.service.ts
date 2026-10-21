@@ -13,6 +13,7 @@ export interface IntakeResult {
 interface Partner {
   id: string;
   code: string;
+  role: 'source' | 'reporting' | 'presence';
   allowed_facilities: string[];
 }
 
@@ -27,7 +28,7 @@ export class IntakeService {
     if (!apiKey || apiKey.length < 20 || apiKey.length > 200) return null;
     return one<Partner>(
       this.pool,
-      `SELECT id, code, allowed_facilities FROM integration_partners
+      `SELECT id, code, role, allowed_facilities FROM integration_partners
         WHERE api_key_hash = $1 AND direction = 'inbound' AND active`,
       [sha256(apiKey)],
     );
@@ -56,6 +57,9 @@ export class IntakeService {
     }
     if (!msh.controlId || !msh.sendingFacility) {
       return { httpStatus: 400, outcome: 'rejected', ack: buildAck(msh, 'CR', ackId(), 'MSH-4 and MSH-10 are required') };
+    }
+    if (partner.role === 'presence') {
+      return { httpStatus: 403, outcome: 'rejected', ack: buildAck(msh, 'CR', ackId(), 'This partner may only send presence') };
     }
     if (!partner.allowed_facilities.includes(msh.sendingFacility)) {
       return { httpStatus: 403, outcome: 'rejected', ack: buildAck(msh, 'CR', ackId(), 'Sending facility is not allowed for this partner') };

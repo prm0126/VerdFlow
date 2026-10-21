@@ -4,6 +4,7 @@ import { releaseCapacity } from '../availability/capacity';
 import type { AppConfig } from '../config';
 import { one, withTransaction } from '../database/db';
 import { absenceNow, onShiftNow } from '../rota/rota.service';
+import { recordMilestone } from '../workflow/milestones';
 import { backoffSeconds } from '../processing/processor';
 
 interface OutboundRow {
@@ -200,6 +201,7 @@ export class DeliveryWorker {
                 WHERE id = $1 AND state = 'reserved'`,
               [row.study_id],
             );
+            await recordMilestone(client, row.study_id, 'delivered');
           }
         }
         await studyEvent(client, row, 'delivery_accepted', { ackCode });

@@ -268,3 +268,66 @@ export function buildAssignmentMessage(a: AssignmentOutput): string {
     ].join('\r') + '\r'
   );
 }
+
+/**
+ * Lifecycle event sent back by the reporting side (profile VF-LIFECYCLE-1, a proposal until the
+ * interface specification is signed):
+ *  - ORM^O01 with ORC-1 = OK (radiologist accepted) or UA (unable to accept, reason in ORC-16)
+ *  - ORU^R01 with OBR-25 = P (preliminary) or F (final); C (corrected) is read as final
+ * Every message must echo ZAS-1 (assignment ID) and ZAS-2 (assignment version) from the assignment.
+ */
+export interface LifecycleEvent {
+  kind: 'accepted' | 'declined' | 'preliminary' | 'final';
+  assignmentId: string;
+  assignmentVersion: number;
+  accession: string;
+  reason?: string;
+}
+
+export function isLifecycleMessage(msg: Hl7Message): boolean {
+  const msh = readMsh(msg);
+  if (msh.messageType === 'ORU' && msh.triggerEvent === 'R01') return true;
+  const oc = get(msg, 'ORC', 1);
+  return msh.messageType === 'ORM' && (oc === 'OK' || oc === 'UA');
+}
+
+export function toLifecycleEvent(msg: Hl7Message): LifecycleEvent {
+  const msh = readMsh(msg);
+  let kind: LifecycleEvent['kind'];
+  if (msh.messageType === 'ORU' && msh.triggerEvent === 'R01') {
+    const status = get(msg, 'OBR', 25);
+    if (status === 'P') kind = 'preliminary';
+    else if (status === 'F' || status === 'C') kind = 'final';
+    else throw new Hl7ParseError(`OBR-25 result status ${status ?? '(empty)'} is not supported`, 'UNSUPPORTED_RESULT_STATUS');
+  } else {
+    const oc = get(msg, 'ORC', 1);
+    if (oc === 'OK') kind = 'accepted';
+    else if (oc === 'UA') kind = 'declined';
+    else throw new Hl7ParseError(`Order control ${oc ?? '(empty)'} is not a lifecycle event`, 'UNSUPPORTED_ORDER_CONTROL');
+  }
+  const assignmentId = get(msg, 'ZAS', 1);
+  const version = Number(get(msg, 'ZAS', 2));
+  if (!assignmentId || !/^[0-9a-f-]{36}$/i.test(assignmentId)) throw new Hl7ParseError('ZAS-1 assignment ID is missing or invalid', 'MISSING_ASSIGNMENT_ID');
+  if (!Number.isInteger(version) || version < 1) throw new Hl7ParseError('ZAS-2 assignment version is missing', 'MISSING_ASSIGNMENT_VERSION');
+  const accession = get(msg, 'OBR', 18) ?? get(msg, 'ORC', 3) ?? get(msg, 'OBR', 3);
+  if (!accession) throw new Hl7ParseError('Accession is missing', 'MISSING_ACCESSION');
+  return { kind, assignmentId, assignmentVersion: version, accession, reason: get(msg, 'ORC', 16, 2) ?? get(msg, 'ORC', 16, 1) };
+}
+
+/** Builds a lifecycle message, for the simulator and tests. */
+export function buildLifecycleMessage(e: LifecycleEvent & { controlId: string; sendingFacility: string; messageTime?: Date }): string {
+  const x = escapeHl7;
+  const ts = hl7Timestamp(e.messageTime ?? new Date());
+  const result = e.kind === 'preliminary' || e.kind === 'final';
+  const obr = ['1', undefined, x(e.accession), 'REPORT', ...Array(13).fill(undefined), x(e.accession), ...Array(6).fill(undefined), result ? (e.kind === 'final' ? 'F' : 'P') : undefined];
+  return (
+    [
+      `MSH|^~\\&|REPORTING|${x(e.sendingFacility)}|VERDFLOW|VERDFLOW|${ts}||${result ? 'ORU^R01' : 'ORM^O01'}|${x(e.controlId)}|P|2.5.1`,
+      result ? undefined : buildSegment('ORC', [e.kind === 'accepted' ? 'OK' : 'UA', undefined, x(e.accession), ...Array(12).fill(undefined), e.reason ? `^${x(e.reason)}` : undefined]),
+      buildSegment('OBR', obr),
+      buildSegment('ZAS', [x(e.assignmentId), String(e.assignmentVersion)]),
+    ]
+      .filter(Boolean)
+      .join('\r') + '\r'
+  );
+}

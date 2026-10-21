@@ -16,6 +16,16 @@ interface DashboardData {
   outbound_uncertain: number;
   outbound_failed: number;
   radiologists_ready: number;
+  awaiting_vetting: number;
+  reporting: number;
+  finalized_24h: number;
+  escalations_open: number;
+  escalations_unacknowledged: number;
+  tat_overdue: number;
+  tat_at_risk: number;
+  tat_closed_24h: number;
+  tat_late_24h: number;
+  reviews_open: number;
   continuity: { preserved: number; broken: number };
   manualReviewReasons: { reason_code: string; n: number }[];
 }
@@ -52,12 +62,22 @@ export function Dashboard() {
             <Card label="Quarantined" value={data.quarantined} alert={data.quarantined > 0} to="/errors" />
             <Card label="Control ID collisions" value={data.collisions} alert={data.collisions > 0} to="/errors" />
           </div>
+          <h2>Needs attention</h2>
+          <div className="cards">
+            <Card label="Open escalations" value={data.escalations_open} alert={data.escalations_unacknowledged > 0} to="/escalations" />
+            <Card label="Not yet acknowledged" value={data.escalations_unacknowledged} alert={data.escalations_unacknowledged > 0} to="/escalations" />
+            <Card label="Turnaround overdue" value={data.tat_overdue} alert={data.tat_overdue > 0} to="/escalations" />
+            <Card label="Turnaround at risk" value={data.tat_at_risk} to="/escalations" />
+            <Card label="Waiting for vetting" value={data.awaiting_vetting} to="/vetting" />
+          </div>
           <h2>Studies</h2>
           <div className="cards">
             <Card label="Studies in the last 24 hours" value={data.studies_24h} to="/studies" />
             <Card label="Need a coordinator" value={data.manual_review} alert={data.manual_review > 0} to="/studies?state=manual_review" />
             <Card label="Reserved, not yet sent" value={data.reserved} to="/studies?state=reserved" />
             <Card label="Sent, awaiting acceptance" value={data.awaiting_acceptance} to="/studies?state=awaiting_acceptance" />
+            <Card label="Being reported" value={data.reporting} to="/studies?state=assigned" />
+            <Card label="Final reports (24 hours)" value={data.finalized_24h} to="/studies?state=finalized" />
             <Card label="Radiologists ready and present" value={data.radiologists_ready} to="/availability" />
           </div>
           <h2>Delivery to the third party</h2>
@@ -65,6 +85,12 @@ export function Dashboard() {
             <Card label="Waiting to send" value={data.outbound_pending} />
             <Card label="Delivery uncertain" value={data.outbound_uncertain} alert={data.outbound_uncertain > 0} to="/errors" />
             <Card label="Failed or rejected" value={data.outbound_failed} alert={data.outbound_failed > 0} to="/errors" />
+          </div>
+          <h2>Turnaround and quality (24 hours)</h2>
+          <div className="cards">
+            <Card label="Turnaround steps completed" value={data.tat_closed_24h} />
+            <Card label="Completed late" value={data.tat_late_24h} alert={data.tat_late_24h > 0} />
+            <Card label="Peer reviews open" value={data.reviews_open} to="/peer-review" />
           </div>
           <h2>Same-patient continuity (24 hours)</h2>
           <div className="cards">

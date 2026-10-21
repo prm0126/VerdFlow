@@ -1,3 +1,4 @@
+import { ASSIGNMENT_LABELS, TAT_INTERVALS } from '@vf/shared';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api';
@@ -66,6 +67,12 @@ interface Detail {
   assignments: { id: string; version: number; status: string; team_code: string; radiologist_name: string; work_units: number; created_at: string; end_reason: string | null }[];
   outbound: Outbound[];
   intake: { id: string; control_id: string; message_type: string; status: string; reason_code: string | null; received_at: string }[];
+  vetted_at: string | null;
+  vetting_protocol: string | null;
+  vetting_note: string | null;
+  clocks: { interval_code: keyof typeof TAT_INTERVALS; rule_set_version: number; target_minutes: number; started_at: string; due_at: string; stopped_at: string | null; state: string }[];
+  escalations: { id: string; kind: string; reason_code: string; raised_at: string; acknowledged_at: string | null; acknowledged_by_name: string | null; resolved_at: string | null; resolution: string | null }[];
+  review: { id: string; status: string; skip_reason: string | null; outcome: string | null; comment: string | null; reviewer_name: string | null; completed_at: string | null } | null;
 }
 
 export function StudyDetail() {
@@ -180,7 +187,18 @@ export function StudyDetail() {
               {(data.state === 'manual_review' || data.state === 'ready') && (
                 <button onClick={() => act(() => api(`/studies/${data.id}/reallocate`, { method: 'POST' }))}>Route again</button>
               )}
-              {data.state !== 'cancelled' && (
+              {['reserved', 'awaiting_acceptance', 'assigned'].includes(data.state) && (
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    const reason = window.prompt('Why are you taking this study back from the radiologist?');
+                    if (reason) act(() => api(`/studies/${data.id}/reassign`, { method: 'POST', body: { reason } }));
+                  }}
+                >
+                  Reassign
+                </button>
+              )}
+              {!['cancelled', 'finalized', 'vetting_rejected'].includes(data.state) && (
                 <button
                   className="danger"
                   onClick={() => {
@@ -195,6 +213,73 @@ export function StudyDetail() {
           )}
         </div>
       </div>
+
+      {(data.vetted_at || data.clocks.length > 0 || data.escalations.length > 0 || data.review) && (
+        <div className="grid2">
+          <div className="panel">
+            <h3 style={{ marginTop: 0 }}>Turnaround</h3>
+            {data.vetted_at && (
+              <p className="small">
+                Vetted <When value={data.vetted_at} />
+                {data.vetting_protocol && <> · protocol {data.vetting_protocol}</>}
+                {data.vetting_note && <> · “{data.vetting_note}”</>}
+              </p>
+            )}
+            {data.clocks.length > 0 ? (
+              <table>
+                <tbody>
+                  {data.clocks.map((c) => (
+                    <tr key={c.interval_code}>
+                      <td>{TAT_INTERVALS[c.interval_code]?.label ?? c.interval_code}</td>
+                      <td className="small">
+                        {c.target_minutes} min target (rules v{c.rule_set_version})
+                      </td>
+                      <td>
+                        <State value={c.state} />
+                        <div className="small muted">
+                          {c.stopped_at ? (
+                            <>
+                              done <When value={c.stopped_at} />
+                            </>
+                          ) : (
+                            <>
+                              due <When value={c.due_at} />
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="small muted">No turnaround targets apply.</p>
+            )}
+          </div>
+          <div className="panel">
+            <h3 style={{ marginTop: 0 }}>Escalations and peer review</h3>
+            {data.escalations.map((e) => (
+              <div key={e.id} className="small" style={{ marginBottom: '0.3rem' }}>
+                <span className={`badge ${e.resolved_at ? 'grey' : e.kind === 'tat_breach' ? 'bad' : 'warn'}`}>
+                  {e.kind === 'tat_breach' ? 'Overdue' : e.kind === 'tat_warning' ? 'At risk' : 'Needs a coordinator'}
+                </span>{' '}
+                <Reason code={e.reason_code} /> raised <When value={e.raised_at} />
+                {e.acknowledged_by_name && <> · acknowledged by {e.acknowledged_by_name}</>}
+                {e.resolved_at && <> · closed: {e.resolution}</>}
+              </div>
+            ))}
+            {data.escalations.length === 0 && <p className="small muted">No escalations.</p>}
+            {data.review && (
+              <p className="small">
+                Peer review: <State value={data.review.status} /> <Reason code={data.review.skip_reason} />
+                {data.review.reviewer_name && <> · reviewer {data.review.reviewer_name}</>}
+                {data.review.outcome && <> · {data.review.outcome.replace(/_/g, ' ')}</>}
+                {data.review.comment && <> · “{data.review.comment}”</>}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {latest && latest.candidates.length > 0 && (
         <>
@@ -253,7 +338,10 @@ export function StudyDetail() {
               <td>{a.team_code}</td>
               <td>{a.work_units}</td>
               <td>
-                <State value={a.status} /> <Reason code={a.end_reason} />
+                <span className={`badge ${a.status === 'accepted' || a.status === 'completed' || a.status === 'delivered' ? 'good' : a.status === 'declined' ? 'warn' : 'grey'}`}>
+                  {ASSIGNMENT_LABELS[a.status] ?? a.status}
+                </span>{' '}
+                <Reason code={a.end_reason} />
               </td>
               <td>
                 <When value={a.created_at} />

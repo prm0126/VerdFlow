@@ -103,11 +103,77 @@ export const exclusionRuleSchema = z
   })
   .strict();
 
+/**
+ * Turnaround intervals between workflow events. Only events VerdFlow actually receives are offered:
+ * received → ready (after vetting) → delivered (destination ACK) → accepted (radiologist) →
+ * preliminary → final.
+ */
+export const TAT_INTERVALS = {
+  received_to_ready: { from: 'received', to: 'ready', label: 'Received to ready (vetting wait)' },
+  ready_to_delivered: { from: 'ready', to: 'delivered', label: 'Ready to delivered' },
+  ready_to_accepted: { from: 'ready', to: 'accepted', label: 'Ready to accepted by a radiologist' },
+  accepted_to_preliminary: { from: 'accepted', to: 'preliminary', label: 'Accepted to preliminary report' },
+  accepted_to_final: { from: 'accepted', to: 'final', label: 'Accepted to final report' },
+  preliminary_to_final: { from: 'preliminary', to: 'final', label: 'Preliminary to final report' },
+  ready_to_final: { from: 'ready', to: 'final', label: 'Ready to final report' },
+} as const;
+export type TatIntervalCode = keyof typeof TAT_INTERVALS;
+export const TAT_EVENTS = ['received', 'ready', 'delivered', 'accepted', 'preliminary', 'final'] as const;
+export type TatEvent = (typeof TAT_EVENTS)[number];
+
+const tatSchema = z
+  .object({
+    warnAtPercent: z.number().int().min(10).max(99).default(75),
+    profiles: z
+      .array(
+        z
+          .object({
+            priority: z.enum(['STAT', 'URGENT', 'ROUTINE']),
+            intervals: z
+              .array(
+                z
+                  .object({
+                    code: z.enum(Object.keys(TAT_INTERVALS) as [TatIntervalCode, ...TatIntervalCode[]]),
+                    minutes: z.number().int().min(1).max(60 * 24 * 30),
+                  })
+                  .strict(),
+              )
+              .max(20),
+          })
+          .strict(),
+      )
+      .max(3),
+  })
+  .strict()
+  .superRefine((t, ctx) => {
+    const seen = new Set<string>();
+    for (const p of t.profiles) {
+      if (seen.has(p.priority)) ctx.addIssue({ code: 'custom', message: `There are two turnaround profiles for ${p.priority}` });
+      seen.add(p.priority);
+      const codes = new Set<string>();
+      for (const i of p.intervals) {
+        if (codes.has(i.code)) ctx.addIssue({ code: 'custom', message: `${p.priority} has ${i.code} twice` });
+        codes.add(i.code);
+      }
+    }
+  });
+
+const peerReviewSchema = z
+  .object({
+    enabled: z.boolean(),
+    /** Share of final reports sampled, in whole percent. The sample is stable: retries never change it. */
+    percent: z.number().int().min(0).max(100),
+    dailyCapPerReviewer: z.number().int().min(1).max(200),
+  })
+  .strict();
+
 export const ruleSetDefinitionSchema = z
   .object({
     routing: z.array(routingRuleSchema).max(500),
     exclusions: z.array(exclusionRuleSchema).max(500),
     continuity: z.object({ enabled: z.boolean() }).strict(),
+    tat: tatSchema.default({ warnAtPercent: 75, profiles: [] }),
+    peerReview: peerReviewSchema.default({ enabled: false, percent: 0, dailyCapPerReviewer: 5 }),
   })
   .strict()
   .superRefine((d, ctx) => {
@@ -213,4 +279,10 @@ export function evaluateExclusions(def: RuleSetDefinition, facts: Facts): Exclus
   return out;
 }
 
-export const EMPTY_RULE_SET: RuleSetDefinition = { routing: [], exclusions: [], continuity: { enabled: true } };
+export const EMPTY_RULE_SET: RuleSetDefinition = {
+  routing: [],
+  exclusions: [],
+  continuity: { enabled: true },
+  tat: { warnAtPercent: 75, profiles: [] },
+  peerReview: { enabled: false, percent: 0, dailyCapPerReviewer: 5 },
+};

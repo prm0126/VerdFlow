@@ -13,6 +13,9 @@ import { AuditLog } from './pages/AuditLog';
 import { Rota } from './pages/Rota';
 import { SetPassword } from './pages/SetPassword';
 import { Users } from './pages/Users';
+import { Escalations } from './pages/Escalations';
+import { PeerReview } from './pages/PeerReview';
+import { Vetting } from './pages/Vetting';
 
 const MeContext = createContext<Me | null>(null);
 export const useMe = () => useContext(MeContext)!;
@@ -55,6 +58,9 @@ export function App() {
           </div>
           <NavLink to="/" end>Dashboard</NavLink>
           <NavLink to="/studies">Worklist</NavLink>
+          {can('vetting.perform') && <NavLink to="/vetting">Vetting</NavLink>}
+          <NavLink to="/escalations">Escalations</NavLink>
+          <NavLink to="/peer-review">Peer review</NavLink>
           {can('errors.manage') && <NavLink to="/errors">Errors</NavLink>}
           <NavLink to="/availability">Availability</NavLink>
           <NavLink to="/rota">Rota</NavLink>
@@ -82,6 +88,9 @@ export function App() {
             <Route path="/rules" element={<Rules />} />
             <Route path="/masters" element={<Masters />} />
             <Route path="/rota" element={<Rota />} />
+            <Route path="/vetting" element={<Vetting />} />
+            <Route path="/escalations" element={<Escalations />} />
+            <Route path="/peer-review" element={<PeerReview />} />
             <Route path="/users" element={<Users />} />
             <Route path="/audit" element={<AuditLog />} />
             <Route path="*" element={<Navigate to="/" />} />

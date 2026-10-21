@@ -37,7 +37,7 @@ export class AvailabilityService {
               ${onShiftNow('r.id')} AS on_shift, ${absenceNow('r.id')} AS absence,
               (SELECT max(sh.ends_at) FROM shifts sh WHERE sh.radiologist_id = r.id AND sh.starts_at <= now() AND sh.ends_at > now()) AS shift_ends_at,
               st.capacity_units, st.active_units,
-              (SELECT count(*)::int FROM assignments a WHERE a.radiologist_id = r.id AND a.status IN ('reserved','sent','delivered')) AS active_assignments,
+              (SELECT count(*)::int FROM assignments a WHERE a.radiologist_id = r.id AND a.status IN ('reserved','sent','delivered','accepted')) AS active_assignments,
               coalesce((SELECT array_agg(t.code ORDER BY t.code) FROM team_members tm JOIN teams t ON t.id = tm.team_id
                          WHERE tm.radiologist_id = r.id AND tm.valid_from <= CURRENT_DATE
                            AND (tm.valid_to IS NULL OR tm.valid_to >= CURRENT_DATE)), '{}') AS teams

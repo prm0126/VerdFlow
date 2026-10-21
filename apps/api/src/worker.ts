@@ -2,9 +2,11 @@ import { Pool } from 'pg';
 import { loadConfig } from './config';
 import { DeliveryWorker } from './outbound/delivery';
 import { Processor } from './processing/processor';
+import { TimerWorker } from './workflow/timers';
 
 /**
- * Background worker: processes intake messages and delivers outbound HL7. Several copies can run at
+ * Background worker: processes intake messages, delivers outbound HL7 and runs turnaround timers and
+ * escalations every 15 seconds. Several copies can run at
  * once; rows are claimed with FOR UPDATE SKIP LOCKED.
  */
 async function main() {
@@ -31,8 +33,10 @@ async function main() {
     }
   };
 
+  const timers = new TimerWorker(pool);
   const leaseTimer = setInterval(() => {
     delivery.recoverExpiredLeases().catch((err) => console.error('[leases]', err.message));
+    timers.tick().catch((err) => console.error('[timers]', err.message));
   }, 15_000);
 
   console.log('VerdFlow worker started');

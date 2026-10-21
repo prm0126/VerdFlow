@@ -14,6 +14,9 @@ import {
   RulesController,
   StudiesController,
   UsersController,
+  VettingController,
+  EscalationsController,
+  PeerReviewController,
 } from './app.controllers';
 import { AuthService } from './auth/auth.service';
 import { AuthGuard } from './auth/guard';
@@ -28,6 +31,9 @@ import { RotaService } from './rota/rota.service';
 import { RulesService } from './rules/rules.service';
 import { StudiesService } from './studies/studies.service';
 import { UsersService } from './users/users.service';
+import { VettingService } from './vetting/vetting.service';
+import { PeerReviewService } from './workflow/peer-review';
+import { EscalationsService } from './workflow/timers';
 
 /** The services are plain classes so the worker and tests can use them without Nest. */
 const services = [
@@ -40,6 +46,9 @@ const services = [
   { provide: RulesService, deps: false },
   { provide: RotaService, deps: false },
   { provide: UsersService, deps: false },
+  { provide: VettingService, deps: true },
+  { provide: EscalationsService, deps: false },
+  { provide: PeerReviewService, deps: false },
 ].map(({ provide, deps }) => ({
   provide,
   inject: [PG_POOL, APP_CONFIG],
@@ -71,6 +80,9 @@ export class AppModule {
         RulesController,
         MastersController,
         AuditController,
+        VettingController,
+        EscalationsController,
+        PeerReviewController,
       ],
       providers: [...services, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: AuthGuard }],
     };

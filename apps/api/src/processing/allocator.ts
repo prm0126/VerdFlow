@@ -294,11 +294,11 @@ async function checkRoom(client: PoolClient, study: StudyRow): Promise<RoomCheck
   return { hold: false, reasonCode: 'ROOM_OK', room: study.room };
 }
 
-/** Radiologists the destination has already rejected for this study are not offered to it again. */
+/** Radiologists rejected by the destination, who declined, or a coordinator moved the study from, are not offered it again. */
 async function destinationRejections(client: PoolClient, studyId: string): Promise<Set<string>> {
   const rows = await many<{ radiologist_id: string }>(
     client,
-    `SELECT DISTINCT radiologist_id FROM assignments WHERE study_id = $1 AND end_reason = 'DESTINATION_REJECTED'`,
+    `SELECT DISTINCT radiologist_id FROM assignments WHERE study_id = $1 AND end_reason IN ('DESTINATION_REJECTED', 'RADIOLOGIST_DECLINED', 'COORDINATOR_REASSIGNED')`,
     [studyId],
   );
   return new Set(rows.map((r) => r.radiologist_id));
@@ -307,7 +307,7 @@ async function destinationRejections(client: PoolClient, studyId: string): Promi
 function assess(r: CandidateRow, def: RuleSetDefinition, facts: Facts, units: number, config: AppConfig, rejected: Set<string>): CandidateTrace {
   const reasons: string[] = [];
   if (!r.active) reasons.push('INACTIVE');
-  if (rejected.has(r.radiologist_id)) reasons.push('REJECTED_BY_DESTINATION');
+  if (rejected.has(r.radiologist_id)) reasons.push('ALREADY_REJECTED_OR_DECLINED');
   if (!r.has_hospital) reasons.push('NO_HOSPITAL_PERMISSION');
   if (!r.has_privilege) reasons.push('NO_MODALITY_PRIVILEGE');
   if (config.rotaRequired && !r.on_shift) reasons.push('NO_SHIFT');

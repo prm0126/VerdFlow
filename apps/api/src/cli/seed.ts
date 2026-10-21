@@ -13,6 +13,16 @@ import { MastersService } from '../masters/masters.service';
  * (an administrator and a separate rule approver) and a published rule set. Safe to run more than once.
  * Generated passwords and partner keys are printed once and written to .dev-keys.json (git-ignored).
  */
+const DEMO_TAT = {
+  warnAtPercent: 75,
+  profiles: [
+    { priority: 'STAT', intervals: [{ code: 'received_to_ready', minutes: 15 }, { code: 'ready_to_accepted', minutes: 5 }, { code: 'ready_to_final', minutes: 60 }] },
+    { priority: 'URGENT', intervals: [{ code: 'received_to_ready', minutes: 60 }, { code: 'ready_to_accepted', minutes: 15 }, { code: 'ready_to_final', minutes: 240 }] },
+    { priority: 'ROUTINE', intervals: [{ code: 'received_to_ready', minutes: 240 }, { code: 'ready_to_accepted', minutes: 60 }, { code: 'ready_to_final', minutes: 1440 }] },
+  ],
+};
+const DEMO_PEER_REVIEW = { enabled: true, percent: 20, dailyCapPerReviewer: 5 };
+
 async function main() {
   const config = loadConfig();
   const pool = new Pool({ connectionString: config.databaseUrl });
@@ -25,6 +35,7 @@ async function main() {
       { email: process.env.ADMIN_EMAIL ?? 'admin@verdflow.local', name: 'VerdFlow Administrator', roles: ['admin'] },
       { email: 'approver@verdflow.local', name: 'Rule Approver', roles: ['rule_approver', 'viewer'] },
       { email: 'coordinator@verdflow.local', name: 'Reporting Coordinator', roles: ['coordinator'] },
+      { email: 'radiologist@verdflow.local', name: 'Dr Asha Patel', roles: ['radiologist'] },
     ];
     let adminId = '';
     for (const u of users) {
@@ -48,8 +59,9 @@ async function main() {
     const save = (kind: Parameters<MastersService['save']>[0], input: unknown) => masters.save(kind, input, adminId);
 
     for (const p of [
-      { code: 'RIS_SOURCE', name: 'Source Mirth (hospital RIS)', direction: 'inbound', allowedFacilities: ['CITYH'] },
-      { code: 'PACS_PRESENCE', name: 'Reporting workstation presence', direction: 'inbound', allowedFacilities: [] },
+      { code: 'RIS_SOURCE', name: 'Source Mirth (hospital RIS)', direction: 'inbound', role: 'source', allowedFacilities: ['CITYH'] },
+      { code: 'PACS_PRESENCE', name: 'Reporting workstation presence', direction: 'inbound', role: 'presence', allowedFacilities: [] },
+      { code: 'REPORTING_RETURN', name: 'Third-party Mirth (acceptance and reports)', direction: 'inbound', role: 'reporting', allowedFacilities: ['TELERAD'] },
       {
         code: 'THIRD_PARTY_MIRTH',
         name: 'Third-party Mirth (assignments)',
@@ -79,7 +91,7 @@ async function main() {
     for (const s of [
       { code: 'CTHEAD', name: 'CT head', modalityCode: 'CT' },
       { code: 'CTCAP', name: 'CT chest, abdomen and pelvis', modalityCode: 'CT', workUnits: 3 },
-      { code: 'MRBRAIN', name: 'MR brain', modalityCode: 'MR' },
+      { code: 'MRBRAIN', name: 'MR brain', modalityCode: 'MR', requiresVetting: true, vettingProtocols: ['Standard brain', 'Brain with contrast'] },
       { code: 'XRCHEST', name: 'X-ray chest', modalityCode: 'XR' },
       { code: 'USABDO', name: 'Ultrasound abdomen', modalityCode: 'US' },
     ]) {
@@ -123,7 +135,29 @@ async function main() {
     );
     if (added.rowCount) console.log(`Added a 24-hour demo shift for ${added.rowCount} radiologists.`);
 
-    const published = await one(pool, `SELECT 1 FROM rule_sets WHERE status = 'published'`);
+    // The demo radiologist account is Dr Asha Patel (R001), for vetting and peer review.
+    const radUser = await one<{ id: string }>(pool, `SELECT id FROM users WHERE email = 'radiologist@verdflow.local'`);
+    if (radUser) await pool.query(`UPDATE radiologists SET user_id = $1 WHERE code = 'R001' AND user_id IS NULL`, [radUser.id]);
+
+    const publishSeeded = (definition: unknown, note: string) =>
+      withTransaction(pool, async (client) => {
+        const retired = await one<{ version: number }>(client, `UPDATE rule_sets SET status = 'retired', retired_at = now() WHERE status = 'published' RETURNING version`);
+        const row = await one<{ id: string }>(
+          client,
+          `INSERT INTO rule_sets (version, status, definition, checksum, note, created_by, published_at, decided_at, decision_note)
+           VALUES ((SELECT coalesce(max(version), 0) + 1 FROM rule_sets), 'published', $1, $2, $3, NULL, now(), now(), 'Seeded for local development')
+           RETURNING id`,
+          [JSON.stringify(definition), sha256(JSON.stringify(definition)), note],
+        );
+        await audit(client, { actorType: 'system', action: 'rules.published', entityType: 'rule_set', entityId: row!.id, detail: { seeded: true, retiredVersion: retired?.version ?? null } });
+      });
+
+    const published = await one<{ definition: unknown }>(pool, `SELECT definition FROM rule_sets WHERE status = 'published'`);
+    if (published && ruleSetDefinitionSchema.parse(published.definition).tat.profiles.length === 0) {
+      // Older demo databases: add the demo turnaround targets and peer review as a new version.
+      await publishSeeded({ ...ruleSetDefinitionSchema.parse(published.definition), tat: DEMO_TAT, peerReview: DEMO_PEER_REVIEW }, 'Demo turnaround targets and peer review');
+      console.log('Published a new demo rule set version with turnaround targets and peer review.');
+    }
     if (!published) {
       const definition = ruleSetDefinitionSchema.parse({
         continuity: { enabled: true },
@@ -161,17 +195,10 @@ async function main() {
             reasonCode: 'STAT_CONSULTANT_ONLY',
           },
         ],
+        tat: DEMO_TAT,
+        peerReview: DEMO_PEER_REVIEW,
       });
-      await withTransaction(pool, async (client) => {
-        const row = await one<{ id: string }>(
-          client,
-          `INSERT INTO rule_sets (version, status, definition, checksum, note, created_by, published_at, decided_at, decision_note)
-           VALUES ((SELECT coalesce(max(version), 0) + 1 FROM rule_sets), 'published', $1, $2, 'Demo starting rules', NULL, now(), now(), 'Seeded for local development')
-           RETURNING id`,
-          [JSON.stringify(definition), sha256(JSON.stringify(definition))],
-        );
-        await audit(client, { actorType: 'system', action: 'rules.published', entityType: 'rule_set', entityId: row!.id, detail: { seeded: true } });
-      });
+      await publishSeeded(definition, 'Demo starting rules');
       console.log('Published the demo rule set.');
     }
 

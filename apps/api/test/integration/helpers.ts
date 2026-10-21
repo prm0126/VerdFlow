@@ -26,6 +26,7 @@ export interface Fixture {
   approverId: string;
   inboundKey: string;
   presenceKey: string;
+  reportingKey: string;
   masters: MastersService;
 }
 
@@ -47,7 +48,8 @@ export async function seed(pool: Pool): Promise<Fixture> {
   const masters = new MastersService(pool);
   const save = (kind: Parameters<MastersService['save']>[0], input: unknown) => masters.save(kind, input, adminId);
   const inbound = await save('partners', { code: 'RIS', name: 'RIS', direction: 'inbound', allowedFacilities: ['CITYH'] });
-  const presence = await save('partners', { code: 'PACS', name: 'PACS', direction: 'inbound', allowedFacilities: [] });
+  const presence = await save('partners', { code: 'PACS', name: 'PACS', direction: 'inbound', role: 'presence', allowedFacilities: [] });
+  const reporting = await save('partners', { code: 'REPORTING', name: 'Reporting return', direction: 'inbound', role: 'reporting', allowedFacilities: ['TELERAD'] });
   await save('partners', { code: 'DEST', name: 'Destination', direction: 'outbound', endpointUrl: 'http://dest.invalid/hl7', receivingApplication: 'REP', receivingFacility: 'TR', timeoutMs: 1000 });
   await save('hospitals', { code: 'CITYH', name: 'City Hospital', outboundPartnerCode: 'DEST' });
   await save('modalities', { code: 'CT', name: 'CT', workUnits: 2 });
@@ -86,7 +88,7 @@ export async function seed(pool: Pool): Promise<Fixture> {
   );
   await rules.submit(draft.id, adminId);
   await rules.decide(draft.id, true, 'ok', approverId);
-  return { adminId, approverId, inboundKey: inbound.apiKey!, presenceKey: presence.apiKey!, masters };
+  return { adminId, approverId, inboundKey: inbound.apiKey!, presenceKey: presence.apiKey!, reportingKey: reporting.apiKey!, masters };
 }
 
 let seq = 0;

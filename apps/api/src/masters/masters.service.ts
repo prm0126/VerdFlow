@@ -20,6 +20,8 @@ export const serviceSchema = z.object({
   name,
   modalityCode: code.nullable().optional(),
   workUnits: z.number().positive().max(100).nullable().optional(),
+  requiresVetting: z.boolean().default(false),
+  vettingProtocols: z.array(z.string().trim().min(1).max(80)).max(30).default([]),
   active: z.boolean().default(true),
 });
 export const teamSchema = z.object({ code, name, active: z.boolean().default(true) });
@@ -55,6 +57,7 @@ export const partnerSchema = z.object({
   code,
   name,
   direction: z.enum(['inbound', 'outbound']),
+  role: z.enum(['source', 'reporting', 'presence']).default('source'),
   allowedFacilities: z.array(code).max(500).default([]),
   endpointUrl: z.string().url().max(500).nullable().optional(),
   receivingApplication: z.string().max(60).nullable().optional(),
@@ -112,7 +115,11 @@ export class MastersService {
       case 'modalities':
         return many(this.pool, `SELECT code, name, work_units AS "workUnits", active FROM modalities ORDER BY code`);
       case 'services':
-        return many(this.pool, `SELECT code, name, modality_code AS "modalityCode", work_units AS "workUnits", active FROM services ORDER BY code`);
+        return many(
+          this.pool,
+          `SELECT code, name, modality_code AS "modalityCode", work_units AS "workUnits", requires_vetting AS "requiresVetting",
+                  vetting_protocols AS "vettingProtocols", active FROM services ORDER BY code`,
+        );
       case 'teams':
         return many(
           this.pool,
@@ -138,7 +145,7 @@ export class MastersService {
       case 'partners':
         return many(
           this.pool,
-          `SELECT code, name, direction, allowed_facilities AS "allowedFacilities", endpoint_url AS "endpointUrl",
+          `SELECT code, name, direction, role, allowed_facilities AS "allowedFacilities", endpoint_url AS "endpointUrl",
                   receiving_application AS "receivingApplication", receiving_facility AS "receivingFacility",
                   timeout_ms AS "timeoutMs", active
              FROM integration_partners ORDER BY code`,
@@ -180,10 +187,11 @@ export class MastersService {
           const s = parse(serviceSchema, input);
           if (s.modalityCode) await idsFor(client, 'modalities', [s.modalityCode]);
           await client.query(
-            `INSERT INTO services (code, name, modality_code, work_units, active) VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO services (code, name, modality_code, work_units, requires_vetting, vetting_protocols, active) VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, modality_code = EXCLUDED.modality_code,
-               work_units = EXCLUDED.work_units, active = EXCLUDED.active`,
-            [s.code, s.name, s.modalityCode ?? null, s.workUnits ?? null, s.active],
+               work_units = EXCLUDED.work_units, requires_vetting = EXCLUDED.requires_vetting,
+               vetting_protocols = EXCLUDED.vetting_protocols, active = EXCLUDED.active`,
+            [s.code, s.name, s.modalityCode ?? null, s.workUnits ?? null, s.requiresVetting, s.vettingProtocols, s.active],
           );
           result = { code: s.code };
           break;
@@ -310,20 +318,21 @@ export class MastersService {
     const existing = await one<{ id: string; direction: string }>(client, 'SELECT id, direction FROM integration_partners WHERE code = $1', [p.code]);
     if (existing && existing.direction !== p.direction) throw new MasterError('A partner cannot change direction. Create a new partner.');
     if (p.direction === 'outbound' && !p.endpointUrl) throw new MasterError('An outbound partner needs an endpoint URL');
+    if (p.direction === 'outbound' && p.role !== 'source') throw new MasterError('Roles apply to inbound partners only');
     let apiKey: string | undefined;
     if (!existing && p.direction === 'inbound') apiKey = `vfk_${randomToken(32)}`;
     if (existing) {
       await client.query(
         `UPDATE integration_partners SET name = $2, allowed_facilities = $3, endpoint_url = $4, receiving_application = $5,
-                receiving_facility = $6, timeout_ms = $7, active = $8 WHERE id = $1`,
-        [existing.id, p.name, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active],
+                receiving_facility = $6, timeout_ms = $7, active = $8, role = $9 WHERE id = $1`,
+        [existing.id, p.name, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active, p.role],
       );
     } else {
       await client.query(
         `INSERT INTO integration_partners (code, name, direction, api_key_hash, allowed_facilities, endpoint_url,
-                                           receiving_application, receiving_facility, timeout_ms, active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [p.code, p.name, p.direction, apiKey ? sha256(apiKey) : null, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active],
+                                           receiving_application, receiving_facility, timeout_ms, active, role)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [p.code, p.name, p.direction, apiKey ? sha256(apiKey) : null, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active, p.role],
       );
     }
     return { code: p.code, apiKey };

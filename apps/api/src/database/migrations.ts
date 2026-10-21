@@ -435,4 +435,106 @@ CREATE TABLE password_links (
 );
 `,
   },
+  {
+    version: 3,
+    name: 'vetting_lifecycle_tat_escalations_peer_review',
+    sql: /* sql */ `
+-- What a partner may send: orders (source), lifecycle events back from reporting, or presence.
+ALTER TABLE integration_partners ADD COLUMN role text NOT NULL DEFAULT 'source'
+  CHECK (role IN ('source', 'reporting', 'presence'));
+UPDATE integration_partners SET role = 'presence' WHERE direction = 'inbound' AND allowed_facilities = '{}';
+
+-- Vetting requirement per service.
+ALTER TABLE services ADD COLUMN requires_vetting boolean NOT NULL DEFAULT false;
+ALTER TABLE services ADD COLUMN vetting_protocols text[] NOT NULL DEFAULT '{}';
+
+-- Clinical workflow states and milestone times.
+ALTER TABLE studies DROP CONSTRAINT studies_state_check;
+ALTER TABLE studies ADD CONSTRAINT studies_state_check CHECK (state IN (
+  'awaiting_vetting', 'vetting_rejected', 'ready', 'reserved', 'awaiting_acceptance', 'assigned',
+  'preliminary', 'finalized', 'manual_review', 'cancelled'));
+ALTER TABLE studies ADD COLUMN ready_at timestamptz;
+ALTER TABLE studies ADD COLUMN delivered_at timestamptz;
+ALTER TABLE studies ADD COLUMN accepted_at timestamptz;
+ALTER TABLE studies ADD COLUMN preliminary_at timestamptz;
+ALTER TABLE studies ADD COLUMN finalized_at timestamptz;
+ALTER TABLE studies ADD COLUMN vetted_by uuid REFERENCES users(id);
+ALTER TABLE studies ADD COLUMN vetted_at timestamptz;
+ALTER TABLE studies ADD COLUMN vetting_protocol text;
+ALTER TABLE studies ADD COLUMN vetting_note text;
+ALTER TABLE studies ADD COLUMN reported_by uuid REFERENCES radiologists(id);
+UPDATE studies SET ready_at = created_at WHERE state NOT IN ('awaiting_vetting', 'vetting_rejected');
+
+-- Assignments: accepted by the radiologist, declined, or completed when the report is final.
+ALTER TABLE assignments DROP CONSTRAINT assignments_status_check;
+ALTER TABLE assignments ADD CONSTRAINT assignments_status_check CHECK (status IN (
+  'reserved', 'sent', 'delivered', 'accepted', 'completed', 'declined', 'released', 'cancelled'));
+DROP INDEX assignments_one_active;
+CREATE UNIQUE INDEX assignments_one_active ON assignments (study_id, purpose)
+  WHERE status IN ('reserved', 'sent', 'delivered', 'accepted');
+DROP INDEX assignments_radiologist_idx;
+CREATE INDEX assignments_radiologist_idx ON assignments (radiologist_id)
+  WHERE status IN ('reserved', 'sent', 'delivered', 'accepted');
+
+-- Turnaround clocks. Each clock copies its target when it starts, so later rule changes do not move it.
+CREATE TABLE tat_clocks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  study_id uuid NOT NULL REFERENCES studies(id),
+  interval_code text NOT NULL,
+  rule_set_version integer,
+  target_minutes integer NOT NULL CHECK (target_minutes > 0),
+  started_at timestamptz NOT NULL,
+  warn_at timestamptz NOT NULL,
+  due_at timestamptz NOT NULL,
+  stopped_at timestamptz,
+  state text NOT NULL DEFAULT 'running' CHECK (state IN ('running', 'warning', 'breached', 'met', 'met_late', 'cancelled')),
+  warned_at timestamptz,
+  breached_at timestamptz,
+  UNIQUE (study_id, interval_code)
+);
+CREATE INDEX tat_clocks_open_idx ON tat_clocks (due_at) WHERE state IN ('running', 'warning');
+
+CREATE TABLE escalations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  study_id uuid NOT NULL REFERENCES studies(id),
+  kind text NOT NULL CHECK (kind IN ('manual_review', 'tat_warning', 'tat_breach')),
+  reason_code text NOT NULL,
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+  raised_at timestamptz NOT NULL DEFAULT now(),
+  acknowledged_by uuid REFERENCES users(id),
+  acknowledged_at timestamptz,
+  resolved_at timestamptz,
+  resolution text
+);
+-- At most one open escalation of each kind and reason per study.
+CREATE UNIQUE INDEX escalations_open_uq ON escalations (study_id, kind, reason_code) WHERE resolved_at IS NULL;
+CREATE INDEX escalations_open_idx ON escalations (raised_at DESC) WHERE resolved_at IS NULL;
+
+-- Peer review: one task per study, never the original reporter, capped per reviewer per day.
+CREATE TABLE peer_review_tasks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  study_id uuid NOT NULL UNIQUE REFERENCES studies(id),
+  reporter_id uuid NOT NULL REFERENCES radiologists(id),
+  reviewer_id uuid REFERENCES radiologists(id),
+  rule_set_version integer,
+  status text NOT NULL CHECK (status IN ('open', 'completed', 'skipped')),
+  skip_reason text,
+  outcome text CHECK (outcome IS NULL OR outcome IN ('agree', 'minor_discrepancy', 'major_discrepancy')),
+  comment text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz,
+  completed_by uuid REFERENCES users(id),
+  CHECK (reviewer_id IS NULL OR reviewer_id <> reporter_id),
+  CHECK ((status = 'skipped') = (reviewer_id IS NULL))
+);
+CREATE INDEX peer_review_tasks_reviewer_idx ON peer_review_tasks (reviewer_id, status);
+
+CREATE TABLE peer_review_daily (
+  reviewer_id uuid NOT NULL REFERENCES radiologists(id),
+  day date NOT NULL,
+  assigned integer NOT NULL DEFAULT 0 CHECK (assigned >= 0),
+  PRIMARY KEY (reviewer_id, day)
+);
+`,
+  },
 ];

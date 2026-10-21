@@ -1,4 +1,15 @@
-import { OPERATORS, RADIOLOGIST_FACTS, STUDY_FACTS, type Condition, type ExclusionRule, type RoutingRule, type RuleSetDefinition } from '@vf/shared';
+import {
+  EMPTY_RULE_SET,
+  OPERATORS,
+  RADIOLOGIST_FACTS,
+  STUDY_FACTS,
+  TAT_INTERVALS,
+  type Condition,
+  type ExclusionRule,
+  type RoutingRule,
+  type RuleSetDefinition,
+  type TatIntervalCode,
+} from '@vf/shared';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useCan, useMe } from '../App';
@@ -36,6 +47,71 @@ export function describe(c: Condition): string {
   if ('not' in c) return `not (${describe(c.not)})`;
   const v = Array.isArray(c.value) ? c.value.join(', ') : (c.value ?? '');
   return `${c.fact.replace(/^(study|radiologist)\./, '$1 ')} ${OP_LABEL[c.op]}${v ? ` ${v}` : ''}`;
+}
+
+/** Rule sets saved before turnaround and peer review existed get the defaults. */
+const withDefaults = (d: Partial<RuleSetDefinition> | undefined): RuleSetDefinition => ({ ...EMPTY_RULE_SET, ...(d ?? {}) });
+const PRIORITIES = ['STAT', 'URGENT', 'ROUTINE'] as const;
+
+function TatEditor({ def, onChange }: { def: RuleSetDefinition; onChange: (d: RuleSetDefinition) => void }) {
+  const minutes = (priority: string, code: TatIntervalCode) =>
+    def.tat.profiles.find((p) => p.priority === priority)?.intervals.find((i) => i.code === code)?.minutes;
+  const set = (priority: (typeof PRIORITIES)[number], code: TatIntervalCode, value: string) => {
+    const n = value === '' ? null : Math.max(1, Math.round(Number(value)));
+    const profiles = PRIORITIES.map((p) => {
+      const existing = def.tat.profiles.find((x) => x.priority === p) ?? { priority: p, intervals: [] };
+      if (p !== priority) return existing;
+      const others = existing.intervals.filter((i) => i.code !== code);
+      return { priority: p, intervals: n ? [...others, { code, minutes: n }] : others };
+    }).filter((p) => p.intervals.length > 0);
+    onChange({ ...def, tat: { ...def.tat, profiles } });
+  };
+  return (
+    <>
+      <h3>Turnaround targets (minutes; leave blank for none)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Interval</th>
+            {PRIORITIES.map((p) => (
+              <th key={p}>{p}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {(Object.keys(TAT_INTERVALS) as TatIntervalCode[]).map((code) => (
+            <tr key={code}>
+              <td>{TAT_INTERVALS[code].label}</td>
+              {PRIORITIES.map((p) => (
+                <td key={p}>
+                  <input type="number" min={1} style={{ width: 90 }} value={minutes(p, code) ?? ''} onChange={(e) => set(p, code, e.target.value)} aria-label={`${p} ${code}`} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <label style={{ marginTop: '0.5rem', maxWidth: 260 }}>
+        Warn when this share of the target has passed (%)
+        <input type="number" min={10} max={99} value={def.tat.warnAtPercent} onChange={(e) => onChange({ ...def, tat: { ...def.tat, warnAtPercent: Number(e.target.value) } })} />
+      </label>
+      <h3>Peer review</h3>
+      <div className="row">
+        <label style={{ flexDirection: 'row', alignItems: 'center', gap: '0.4rem' }}>
+          <input type="checkbox" checked={def.peerReview.enabled} onChange={(e) => onChange({ ...def, peerReview: { ...def.peerReview, enabled: e.target.checked } })} />
+          Review a share of final reports
+        </label>
+        <label>
+          Share (%)
+          <input type="number" min={0} max={100} value={def.peerReview.percent} onChange={(e) => onChange({ ...def, peerReview: { ...def.peerReview, percent: Number(e.target.value) } })} style={{ width: 90 }} />
+        </label>
+        <label>
+          Reviews per reviewer per day
+          <input type="number" min={1} max={200} value={def.peerReview.dailyCapPerReviewer} onChange={(e) => onChange({ ...def, peerReview: { ...def.peerReview, dailyCapPerReviewer: Number(e.target.value) } })} style={{ width: 90 }} />
+        </label>
+      </div>
+    </>
+  );
 }
 
 type Leaf = Extract<Condition, { fact: string }>;
@@ -106,7 +182,7 @@ function ConditionEditor({ value, facts, onChange }: { value: Condition; facts: 
 }
 
 function Editor({ draft, onSaved }: { draft: RuleSetRow | null; onSaved: (r: RuleSetRow) => void }) {
-  const base = draft?.definition ?? { routing: [], exclusions: [], continuity: { enabled: true } };
+  const base = withDefaults(draft?.definition);
   const [def, setDef] = useState<RuleSetDefinition>(base);
   const [json, setJson] = useState(JSON.stringify(base, null, 2));
   const [mode, setMode] = useState<'basic' | 'json'>('basic');
@@ -132,7 +208,7 @@ function Editor({ draft, onSaved }: { draft: RuleSetRow | null; onSaved: (r: Rul
     if (m === 'json') setJson(JSON.stringify(def, null, 2));
     else {
       try {
-        setDef(JSON.parse(json));
+        setDef(withDefaults(JSON.parse(json)));
       } catch {
         setErr({ message: 'Fix the JSON before switching to the basic view', issues: [] });
         return;
@@ -252,6 +328,7 @@ function Editor({ draft, onSaved }: { draft: RuleSetRow | null; onSaved: (r: Rul
           >
             Add exclusion
           </button>
+          <TatEditor def={def} onChange={setDef} />
         </>
       )}
       <label style={{ marginTop: '0.8rem' }}>
@@ -367,7 +444,27 @@ export function Rules() {
                 )}
                 {selected.note && <> · “{selected.note}”</>}
               </div>
-              <p>Same-patient continuity: {selected.definition.continuity.enabled ? 'on' : 'off'}</p>
+              <p>
+                Same-patient continuity: {selected.definition.continuity.enabled ? 'on' : 'off'} · Peer review:{' '}
+                {withDefaults(selected.definition).peerReview.enabled
+                  ? `${withDefaults(selected.definition).peerReview.percent}% of final reports, up to ${withDefaults(selected.definition).peerReview.dailyCapPerReviewer} a day per reviewer`
+                  : 'off'}
+              </p>
+              {withDefaults(selected.definition).tat.profiles.length > 0 && (
+                <>
+                  <h3>Turnaround targets</h3>
+                  <table>
+                    <tbody>
+                      {withDefaults(selected.definition).tat.profiles.map((p) => (
+                        <tr key={p.priority}>
+                          <td style={{ width: 90 }}>{p.priority}</td>
+                          <td className="small">{p.intervals.map((i) => `${TAT_INTERVALS[i.code].label}: ${i.minutes} min`).join(' · ')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
               <h3>Routing</h3>
               <table>
                 <tbody>
