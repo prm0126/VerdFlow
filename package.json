@@ -13,6 +13,8 @@
     "db:seed": "pnpm --filter @vf/api db:seed",
     "simulate": "pnpm --filter @vf/api simulate",
     "test": "pnpm --filter @vf/shared build && pnpm -r test",
-    "typecheck": "pnpm --filter @vf/shared build && pnpm -r typecheck"
+    "typecheck": "pnpm --filter @vf/shared build && pnpm -r typecheck",
+    "archive": "pnpm --filter @vf/api archive",
+    "loadtest": "pnpm --filter @vf/api loadtest"
   }
 }

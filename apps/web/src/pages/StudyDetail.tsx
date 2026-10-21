@@ -81,6 +81,18 @@ export function StudyDetail() {
   const can = useCan();
   const [raw, setRaw] = useState<{ title: string; payload: string } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [explanation, setExplanation] = useState<{ text: string; engine: string } | null>(null);
+  const [explaining, setExplaining] = useState(false);
+  const explain = async () => {
+    setExplaining(true);
+    try {
+      setExplanation(await api<{ text: string; engine: string }>(`/assistant/explain-study/${id}`, { method: 'POST' }));
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setExplaining(false);
+    }
+  };
 
   const showRaw = async (kind: 'intake' | 'outbound', mid: string, title: string) => {
     try {
@@ -113,6 +125,17 @@ export function StudyDetail() {
         Study {data.accession} <State value={data.state} /> {data.state_reason && <Reason code={data.state_reason} />}
       </h1>
       <ErrorBox error={actionError} />
+      <div className="row" style={{ marginBottom: '0.6rem' }}>
+        <button className="secondary" onClick={explain} disabled={explaining}>
+          {explaining ? 'Explaining…' : 'Explain in plain English'}
+        </button>
+      </div>
+      {explanation && (
+        <div className="notice">
+          <div style={{ whiteSpace: 'pre-wrap' }}>{explanation.text}</div>
+          <div className="small muted">{explanation.engine === 'claude' ? 'Written by Claude from this study’s record (no patient details sent)' : 'Built-in summary'}</div>
+        </div>
+      )}
       <div className="grid2">
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>What came in</h3>

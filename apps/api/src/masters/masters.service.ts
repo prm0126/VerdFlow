@@ -63,6 +63,7 @@ export const partnerSchema = z.object({
   receivingApplication: z.string().max(60).nullable().optional(),
   receivingFacility: z.string().max(60).nullable().optional(),
   timeoutMs: z.number().int().min(100).max(120000).default(10000),
+  maxInFlight: z.number().int().min(1).max(1000).default(4),
   active: z.boolean().default(true),
 });
 
@@ -147,7 +148,7 @@ export class MastersService {
           this.pool,
           `SELECT code, name, direction, role, allowed_facilities AS "allowedFacilities", endpoint_url AS "endpointUrl",
                   receiving_application AS "receivingApplication", receiving_facility AS "receivingFacility",
-                  timeout_ms AS "timeoutMs", active
+                  timeout_ms AS "timeoutMs", max_in_flight AS "maxInFlight", active
              FROM integration_partners ORDER BY code`,
         );
     }
@@ -324,15 +325,15 @@ export class MastersService {
     if (existing) {
       await client.query(
         `UPDATE integration_partners SET name = $2, allowed_facilities = $3, endpoint_url = $4, receiving_application = $5,
-                receiving_facility = $6, timeout_ms = $7, active = $8, role = $9 WHERE id = $1`,
-        [existing.id, p.name, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active, p.role],
+                receiving_facility = $6, timeout_ms = $7, active = $8, role = $9, max_in_flight = $10 WHERE id = $1`,
+        [existing.id, p.name, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active, p.role, p.maxInFlight],
       );
     } else {
       await client.query(
         `INSERT INTO integration_partners (code, name, direction, api_key_hash, allowed_facilities, endpoint_url,
-                                           receiving_application, receiving_facility, timeout_ms, active, role)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [p.code, p.name, p.direction, apiKey ? sha256(apiKey) : null, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active, p.role],
+                                           receiving_application, receiving_facility, timeout_ms, active, role, max_in_flight)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [p.code, p.name, p.direction, apiKey ? sha256(apiKey) : null, p.allowedFacilities, p.endpointUrl ?? null, p.receivingApplication ?? null, p.receivingFacility ?? null, p.timeoutMs, p.active, p.role, p.maxInFlight],
       );
     }
     return { code: p.code, apiKey };

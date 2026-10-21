@@ -27,7 +27,7 @@ async function main() {
   const config = loadConfig();
   const pool = new Pool({ connectionString: config.databaseUrl });
   const masters = new MastersService(pool);
-  const keysFile = resolve(__dirname, '../../../../.dev-keys.json');
+  const keysFile = (process.env.DEV_KEYS_FILE || resolve(__dirname, '../../../../.dev-keys.json'));
   const out: Record<string, string> = {};
 
   try {

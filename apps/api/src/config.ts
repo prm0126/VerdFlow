@@ -20,6 +20,14 @@ export interface AppConfig {
   continuityWindowHours: number;
   sessionHours: number;
   outboundMaxAttempts: number;
+  /** Bearer token for /api/metrics. Without it, metrics are served to this machine only. */
+  metricsToken: string | null;
+  workerIntakeConcurrency: number;
+  workerDeliveryConcurrency: number;
+  archiveDir: string;
+  /** Claude model for the assistant; the assistant runs without the API when no key is configured. */
+  aiModel: string;
+  aiEnabled: boolean;
   /** Only radiologists on a rota shift receive new work. */
   rotaRequired: boolean;
   /** An unsent reservation older than this is revalidated before its first transmission. */
@@ -42,6 +50,12 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     outboundMaxAttempts: 8,
     revalidateAfterSeconds: 300,
     rotaRequired: process.env.ROTA_REQUIRED !== 'false',
+    metricsToken: process.env.METRICS_TOKEN || null,
+    workerIntakeConcurrency: Math.max(1, int('WORKER_INTAKE_CONCURRENCY', 8)),
+    workerDeliveryConcurrency: Math.max(1, int('WORKER_DELIVERY_CONCURRENCY', 4)),
+    archiveDir: process.env.ARCHIVE_DIR || resolve(__dirname, '../../../archive'),
+    aiModel: process.env.AI_MODEL || 'claude-opus-5-5',
+    aiEnabled: process.env.AI_ENABLED !== 'false',
     ...overrides,
   };
 }

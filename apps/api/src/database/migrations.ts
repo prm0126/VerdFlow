@@ -537,4 +537,63 @@ CREATE TABLE peer_review_daily (
 );
 `,
   },
+  {
+    version: 4,
+    name: 'ops_scaling_archive_ai',
+    sql: /* sql */ `
+-- At most this many messages in flight to one destination at once.
+ALTER TABLE integration_partners ADD COLUMN max_in_flight integer NOT NULL DEFAULT 4 CHECK (max_in_flight BETWEEN 1 AND 1000);
+
+-- Old raw payloads move to the archive; the row keeps its metadata and where the payload went.
+ALTER TABLE intake_messages ALTER COLUMN payload DROP NOT NULL;
+ALTER TABLE intake_messages ADD COLUMN archived_at timestamptz;
+ALTER TABLE intake_messages ADD COLUMN archive_ref text;
+ALTER TABLE intake_messages ADD CONSTRAINT intake_payload_or_archive CHECK (payload IS NOT NULL OR archive_ref IS NOT NULL);
+CREATE INDEX intake_messages_archivable_idx ON intake_messages (received_at) WHERE payload IS NOT NULL AND status IN ('processed', 'ignored');
+
+CREATE TABLE archive_batches (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  file_name text NOT NULL UNIQUE,
+  sha256 text NOT NULL,
+  message_count integer NOT NULL,
+  first_received_at timestamptz NOT NULL,
+  last_received_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Assistant conversations. Stored per user; only that user can read them.
+CREATE TABLE ai_conversations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ai_conversations_user_idx ON ai_conversations (user_id, updated_at DESC);
+
+CREATE TABLE ai_messages (
+  id bigserial PRIMARY KEY,
+  conversation_id uuid NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+  role text NOT NULL CHECK (role IN ('user', 'assistant')),
+  content text NOT NULL,
+  -- what the assistant looked up to answer, for the user and for audit
+  tools jsonb NOT NULL DEFAULT '[]'::jsonb,
+  engine text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ai_messages_conversation_idx ON ai_messages (conversation_id, id);
+`,
+  },
+  {
+    version: 5,
+    name: 'intake_claim_indexes',
+    sql: /* sql */ `
+-- Picking the next message walks the queue in arrival order and stops at the first one it can take,
+-- and the "earlier message for the same study?" check is a single index probe. Without these the
+-- claim query re-read the whole backlog for every message (measured: 1.2 s per claim at 2,000 waiting).
+CREATE INDEX intake_messages_queue_idx ON intake_messages (received_at, id) WHERE status = 'received';
+CREATE INDEX intake_messages_ordering_seq_idx ON intake_messages (ordering_key, received_at, id) WHERE status = 'received';
+DROP INDEX intake_messages_ordering_idx;
+`,
+  },
 ];

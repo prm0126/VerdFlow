@@ -39,8 +39,12 @@ async function main() {
     timers.tick().catch((err) => console.error('[timers]', err.message));
   }, 15_000);
 
-  console.log('VerdFlow worker started');
-  await Promise.all([loop('intake', () => processor.processNext()), loop('delivery', () => delivery.deliverNext())]);
+  console.log(`VerdFlow worker started (${config.workerIntakeConcurrency} intake, ${config.workerDeliveryConcurrency} delivery loops)`);
+  // Several loops per kind; each claims its own row with SKIP LOCKED, so they never take the same message.
+  await Promise.all([
+    ...Array.from({ length: config.workerIntakeConcurrency }, (_, i) => loop(`intake-${i}`, () => processor.processNext())),
+    ...Array.from({ length: config.workerDeliveryConcurrency }, (_, i) => loop(`delivery-${i}`, () => delivery.deliverNext())),
+  ]);
   clearInterval(leaseTimer);
   await pool.end();
   console.log('VerdFlow worker stopped');

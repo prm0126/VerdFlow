@@ -17,11 +17,15 @@ import {
   VettingController,
   EscalationsController,
   PeerReviewController,
+  OpsController,
+  AssistantController,
 } from './app.controllers';
+import { AssistantService } from './assistant/assistant.service';
 import { AuthService } from './auth/auth.service';
 import { AuthGuard } from './auth/guard';
 import { AvailabilityService } from './availability/availability.service';
-import { APP_CONFIG } from './common/tokens';
+import { APP_CONFIG, METRICS } from './common/tokens';
+import { createMetrics } from './ops/metrics';
 import type { AppConfig } from './config';
 import { DatabaseModule, PG_POOL } from './database/database.module';
 import { ErrorsService } from './errors/errors.service';
@@ -49,6 +53,7 @@ const services = [
   { provide: VettingService, deps: true },
   { provide: EscalationsService, deps: false },
   { provide: PeerReviewService, deps: false },
+  { provide: AssistantService, deps: true },
 ].map(({ provide, deps }) => ({
   provide,
   inject: [PG_POOL, APP_CONFIG],
@@ -83,8 +88,13 @@ export class AppModule {
         VettingController,
         EscalationsController,
         PeerReviewController,
+        OpsController,
+        AssistantController,
       ],
-      providers: [...services, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: AuthGuard }],
+      providers: [
+        ...services,
+        { provide: METRICS, inject: [PG_POOL, APP_CONFIG], useFactory: (pool: Pool, c: AppConfig) => createMetrics(pool, c.presenceStaleSeconds) },
+        { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: AuthGuard }],
     };
   }
 }

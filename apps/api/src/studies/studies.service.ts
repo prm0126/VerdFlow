@@ -176,13 +176,17 @@ export class StudiesService {
 
   /** Raw HL7 is shown only with its own permission, and every view is audited. */
   async rawMessage(kind: 'intake' | 'outbound', id: string, userId: string, ip?: string): Promise<string> {
-    const row = await one<{ payload: string }>(
+    // Every view is audited, including a request for a message whose payload has been archived.
+    const row = await one<{ payload: string | null; archive_ref: string | null }>(
       this.pool,
-      kind === 'intake' ? 'SELECT payload FROM intake_messages WHERE id = $1' : 'SELECT payload FROM outbound_messages WHERE id = $1',
+      kind === 'intake'
+        ? 'SELECT payload, archive_ref FROM intake_messages WHERE id = $1'
+        : 'SELECT payload, NULL::text AS archive_ref FROM outbound_messages WHERE id = $1',
       [id],
     );
     if (!row) throw new NotFound();
     await audit(this.pool, { actorType: 'user', actorId: userId, action: 'hl7.raw_viewed', entityType: `${kind}_message`, entityId: id, ip });
+    if (row.payload === null) return `(Archived in ${row.archive_ref}. Ask an integration engineer to retrieve it from the archive.)`;
     return row.payload;
   }
 

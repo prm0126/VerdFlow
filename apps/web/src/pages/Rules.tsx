@@ -228,11 +228,40 @@ function Editor({ draft, onSaved }: { draft: RuleSetRow | null; onSaved: (r: Rul
       setErr({ message: (e as Error).message, issues: e instanceof ApiError ? e.issues : [] });
     }
   };
+  const [ask, setAsk] = useState('');
+  const [drafting, setDrafting] = useState(false);
+  const draftFromDescription = async () => {
+    setErr(null);
+    setOk(null);
+    setDrafting(true);
+    try {
+      const r = await api<{ definition: RuleSetDefinition; summary: string }>('/assistant/draft-rules', { method: 'POST', body: { instruction: ask } });
+      const d = withDefaults(r.definition);
+      setDef(d);
+      setJson(JSON.stringify(d, null, 2));
+      setOk(`Proposed by Claude: ${r.summary} Check every rule below, then save the draft. Nothing is saved or published until you do.`);
+    } catch (e) {
+      setErr({ message: (e as Error).message, issues: e instanceof ApiError ? e.issues : [] });
+    } finally {
+      setDrafting(false);
+    }
+  };
   const setRouting = (i: number, r: RoutingRule) => setDef({ ...def, routing: def.routing.map((x, j) => (j === i ? r : x)) });
   const setExclusion = (i: number, r: ExclusionRule) => setDef({ ...def, exclusions: def.exclusions.map((x, j) => (j === i ? r : x)) });
 
   return (
     <div className="panel">
+      <div className="notice">
+        <label>
+          Describe a change and Claude will propose the rules, for you to check
+          <div className="row">
+            <input style={{ flex: 1 }} value={ask} maxLength={2000} onChange={(e) => setAsk(e.target.value)} placeholder="For example: send all ultrasound from City Hospital to the general team" />
+            <button className="secondary" onClick={draftFromDescription} disabled={drafting || !ask.trim()}>
+              {drafting ? 'Drafting…' : 'Propose'}
+            </button>
+          </div>
+        </label>
+      </div>
       <div className="tabs">
         <button className={mode === 'basic' ? 'active' : ''} onClick={() => switchMode('basic')}>
           Basic

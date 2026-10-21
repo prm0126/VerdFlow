@@ -13,6 +13,7 @@ import { AuditLog } from './pages/AuditLog';
 import { Rota } from './pages/Rota';
 import { SetPassword } from './pages/SetPassword';
 import { Users } from './pages/Users';
+import { Assistant } from './pages/Assistant';
 import { Escalations } from './pages/Escalations';
 import { PeerReview } from './pages/PeerReview';
 import { Vetting } from './pages/Vetting';
@@ -57,6 +58,7 @@ export function App() {
             VerdFlow<small>Teleradiology workflow</small>
           </div>
           <NavLink to="/" end>Dashboard</NavLink>
+          <NavLink to="/assistant">Assistant</NavLink>
           <NavLink to="/studies">Worklist</NavLink>
           {can('vetting.perform') && <NavLink to="/vetting">Vetting</NavLink>}
           <NavLink to="/escalations">Escalations</NavLink>
@@ -89,6 +91,7 @@ export function App() {
             <Route path="/masters" element={<Masters />} />
             <Route path="/rota" element={<Rota />} />
             <Route path="/vetting" element={<Vetting />} />
+            <Route path="/assistant" element={<Assistant />} />
             <Route path="/escalations" element={<Escalations />} />
             <Route path="/peer-review" element={<PeerReview />} />
             <Route path="/users" element={<Users />} />

@@ -4,7 +4,8 @@ import { loadConfig } from './config';
 async function main() {
   const config = loadConfig();
   const app = await createApp(config);
-  await app.listen(config.port, 'localhost');
+  // Containers set API_HOST=0.0.0.0; locally the API only listens on this machine.
+  await app.listen(config.port, process.env.API_HOST || 'localhost');
   console.log(`VerdFlow API listening on http://localhost:${config.port}/api`);
 }
 

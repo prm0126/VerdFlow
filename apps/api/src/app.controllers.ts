@@ -18,17 +18,22 @@ import {
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
+import { AssistantService } from './assistant/assistant.service';
 import { AuthService, type SessionUser } from './auth/auth.service';
 import { CurrentUser, Public, RequirePermission, SESSION_COOKIE } from './auth/guard';
 import { AvailabilityService } from './availability/availability.service';
 import { APP_CONFIG } from './common/tokens';
 import type { AppConfig } from './config';
 import { PG_POOL } from './database/database.module';
-import { many } from './database/db';
+import { many, one } from './database/db';
+import { latestVersion } from './database/migrator';
+import { migrations } from './database/migrations';
+import { METRICS } from './common/tokens';
+import type { Metrics } from './ops/metrics';
 import { ErrorsService } from './errors/errors.service';
 import { IntakeService } from './intake/intake.service';
 import { MasterError, MastersService, type MasterKind } from './masters/masters.service';
@@ -202,23 +207,33 @@ export class RotaController {
   }
 }
 
+/**
+ * Per sending address. Read when the module loads, so set it in the environment that starts the API.
+ * Above this a sender gets 429 and its Mirth retries; the durable-receipt rule is unchanged.
+ */
+const INTAKE_RATE_PER_MINUTE = Math.max(60, Number(process.env.INTAKE_RATE_PER_MINUTE) || 60_000);
+
 /** Partner-facing endpoints. Authenticated by the partner's API key, not a user session. */
 @Controller('integration')
 export class IntegrationController {
   constructor(
     private readonly intake: IntakeService,
     private readonly availability: AvailabilityService,
+    @Inject(METRICS) private readonly metrics: Metrics,
   ) {}
 
   @Public()
-  @Throttle({ default: { limit: 6000, ttl: 60_000 } })
+  @Throttle({ default: { limit: INTAKE_RATE_PER_MINUTE, ttl: 60_000 } })
   @Post('hl7')
   @Header('content-type', 'x-application/hl7-v2+er7; charset=utf-8')
   async hl7(@Req() req: Request, @Res() res: Response) {
+    const stop = this.metrics.intakeAckSeconds.startTimer();
     const key = bearer(req);
     const body = typeof req.body === 'string' ? req.body : '';
     const result = await this.intake.receive(key, body);
     res.status(result.httpStatus).send(result.ack);
+    stop();
+    this.metrics.intakeMessages.inc({ outcome: result.outcome });
   }
 
   @Public()
@@ -509,5 +524,110 @@ export class PeerReviewController {
   @HttpCode(200)
   complete(@Param('id', ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUser() user: SessionUser, @Req() req: Request) {
     return run(() => this.reviews.complete(id, body, user.id, req.ip));
+  }
+}
+
+/** Liveness, readiness and Prometheus metrics for the platform. */
+@Controller()
+export class OpsController {
+  constructor(
+    @Inject(PG_POOL) private readonly pool: Pool,
+    @Inject(METRICS) private readonly metrics: Metrics,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
+  ) {}
+
+  @Public()
+  @SkipThrottle()
+  @Get('health')
+  health() {
+    return { status: 'ok' };
+  }
+
+  /** Ready only when the database answers and its schema matches this build. */
+  @Public()
+  @SkipThrottle()
+  @Get('ready')
+  async ready(@Res({ passthrough: true }) res: Response) {
+    try {
+      const v = await one<{ v: number }>(this.pool, 'SELECT max(version)::int AS v FROM schema_migrations');
+      const expected = latestVersion(migrations);
+      if (v?.v !== expected) {
+        res.status(503);
+        return { status: 'not_ready', reason: `Database schema is version ${v?.v ?? 0}; this build needs ${expected}` };
+      }
+      return { status: 'ready', schemaVersion: v.v };
+    } catch {
+      res.status(503);
+      return { status: 'not_ready', reason: 'Database unavailable' };
+    }
+  }
+
+  /** Needs METRICS_TOKEN as a bearer token when set; otherwise only from this machine. */
+  @Public()
+  @SkipThrottle()
+  @Get('metrics')
+  async metricsText(@Req() req: Request, @Res() res: Response) {
+    const token = this.config.metricsToken;
+    const allowed = token ? bearer(req) === token : ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '');
+    if (!allowed) {
+      res.status(401).send('Not authorised');
+      return;
+    }
+    res.set('content-type', this.metrics.registry.contentType);
+    res.send(await this.metrics.registry.metrics());
+  }
+}
+
+@Controller('assistant')
+export class AssistantController {
+  constructor(private readonly assistant: AssistantService) {}
+
+  @RequirePermission('dashboard.view')
+  @Get()
+  info() {
+    return { engine: this.assistant.engine };
+  }
+
+  @RequirePermission('dashboard.view')
+  @Get('conversations')
+  conversations(@CurrentUser() user: SessionUser) {
+    return this.assistant.conversations(user);
+  }
+
+  @RequirePermission('dashboard.view')
+  @Get('conversations/:id')
+  conversation(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SessionUser) {
+    return run(() => this.assistant.conversation(user, id));
+  }
+
+  @RequirePermission('dashboard.view')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('ask')
+  @HttpCode(200)
+  ask(@Body() body: { conversationId?: string | null; message?: string }, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    if (body?.conversationId && !/^[0-9a-f-]{36}$/i.test(body.conversationId)) throw new BadRequestException('Invalid conversation');
+    return run(() => this.assistant.ask(user, body ?? {}, req.ip));
+  }
+
+  @RequirePermission('studies.view')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('explain-study/:id')
+  @HttpCode(200)
+  explain(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SessionUser) {
+    return run(() => this.assistant.explainStudy(user, id));
+  }
+
+  @RequirePermission('dashboard.view')
+  @Get('briefing')
+  briefing() {
+    return this.assistant.briefing();
+  }
+
+  @RequirePermission('rules.author')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('draft-rules')
+  @HttpCode(200)
+  draftRules(@Body() body: { instruction?: string }, @CurrentUser() user: SessionUser) {
+    return run(() => this.assistant.draftRules(user, String(body?.instruction ?? '')));
   }
 }

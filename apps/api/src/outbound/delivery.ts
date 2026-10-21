@@ -17,6 +17,8 @@ interface OutboundRow {
   attempts: number;
   possibly_delivered: boolean;
   created_at: Date;
+  partner_id: string;
+  max_in_flight: number;
   endpoint_url: string;
   timeout_ms: number;
 }
@@ -67,9 +69,11 @@ export class DeliveryWorker {
       const row = await one<OutboundRow>(
         client,
         `SELECT o.id, o.study_id, o.assignment_id, o.kind, o.control_id, o.payload, o.attempts, o.possibly_delivered,
-                o.created_at, p.endpoint_url, p.timeout_ms
+                o.created_at, o.partner_id, p.endpoint_url, p.timeout_ms, p.max_in_flight
            FROM outbound_messages o JOIN integration_partners p ON p.id = o.partner_id
           WHERE o.status IN ('pending', 'retry', 'unknown') AND o.next_attempt_at <= now() AND p.active
+            -- skip destinations already at their in-flight limit, so one slow partner cannot hold up the rest
+            AND (SELECT count(*) FROM outbound_messages f WHERE f.partner_id = o.partner_id AND f.status = 'sending') < p.max_in_flight
             -- a cancellation never overtakes its assignment message
             AND NOT EXISTS (SELECT 1 FROM outbound_messages a
                              WHERE o.kind = 'cancellation' AND a.assignment_id = o.assignment_id AND a.kind = 'assignment'
@@ -79,6 +83,10 @@ export class DeliveryWorker {
           FOR UPDATE OF o SKIP LOCKED`,
       );
       if (!row) return null;
+      // Exact limit: claims for one destination serialise on its partner row.
+      await client.query('SELECT 1 FROM integration_partners WHERE id = $1 FOR UPDATE', [row.partner_id]);
+      const inFlight = await one<{ n: number }>(client, `SELECT count(*)::int AS n FROM outbound_messages WHERE partner_id = $1 AND status = 'sending'`, [row.partner_id]);
+      if (inFlight!.n >= row.max_in_flight) return null;
 
       if (row.kind === 'assignment' && !row.possibly_delivered) {
         const check = await this.revalidateBeforeFirstSend(client, row);

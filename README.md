@@ -5,9 +5,10 @@ team and a radiologist, the assignment is committed atomically, and an HL7 messa
 third-party Mirth with its acknowledgment tracked.
 
 This covers **Phase B** (foundation and first vertical slice), **Phase C** (masters, rota and
-availability) and **Phase D** (vetting, reporting lifecycle, turnaround timers, escalations, peer review)
-of the architecture plan. See [docs/phase-b-slice.md](docs/phase-b-slice.md), [docs/phase-c.md](docs/phase-c.md)
-and [docs/phase-d.md](docs/phase-d.md) for what is built, what is stubbed and what comes next.
+availability), **Phase D** (vetting, reporting lifecycle, turnaround timers, escalations, peer review),
+**Phase E** (health, metrics, scaling, archive, load test, deployment) and the **assistant**. See
+[docs/phase-b-slice.md](docs/phase-b-slice.md), [docs/phase-c.md](docs/phase-c.md), [docs/phase-d.md](docs/phase-d.md),
+[docs/phase-e.md](docs/phase-e.md) and [docs/assistant.md](docs/assistant.md).
 
 | Part | Where |
 |---|---|
@@ -56,6 +57,21 @@ reject every 7th assignment, `--decline-every 4` makes the radiologist decline e
 `--report-seconds 20` sets how long reporting takes. MR brain needs vetting in the demo data: approve
 it on the Vetting page. Sign in as `radiologist@verdflow.local` (Dr Asha Patel) to vet and to record
 peer reviews.
+
+## Assistant
+
+Open **Assistant** and ask, for example, "What is scheduled under my name?". It works without an API key
+(built-in answers). Put `ANTHROPIC_API_KEY=...` in `.env` and restart the API to use Claude, which also turns
+on study explanations, the dashboard briefing and drafting rules from a description.
+
+## Operations
+
+```bash
+pnpm loadtest --rate 100 --seconds 20   # needs the API, worker and simulator running
+pnpm archive --days 30                  # move old processed HL7 payloads to ./archive
+curl localhost:4000/api/ready           # readiness; /api/health for liveness; /api/metrics for Prometheus
+POSTGRES_PASSWORD=choose-one docker compose up --build   # production-like stack on http://localhost:8080
+```
 
 ## Tests
 

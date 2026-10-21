@@ -13,7 +13,7 @@ import { buildAck, buildLifecycleMessage, get, hl7Timestamp, parseHl7, readMsh, 
  * Usage: pnpm simulate [--orders N] [--reject-every N] [--decline-every N] [--report-seconds N]
  */
 const api = process.env.VERDFLOW_API ?? 'http://localhost:4000/api';
-const keys = JSON.parse(readFileSync(resolve(__dirname, '../../../../.dev-keys.json'), 'utf8')) as Record<string, string>;
+const keys = JSON.parse(readFileSync((process.env.DEV_KEYS_FILE || resolve(__dirname, '../../../../.dev-keys.json')), 'utf8')) as Record<string, string>;
 const args = process.argv.slice(2);
 const flag = (name: string, fallback: number) => {
   const i = args.indexOf(name);

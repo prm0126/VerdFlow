@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { api } from '../api';
 import { ErrorBox, Reason } from '../components/ui';
 import { useResource } from '../hooks';
 
@@ -46,12 +48,48 @@ function Card({ label, value, alert, to }: { label: string; value: number | stri
   );
 }
 
+/** AI briefing: Claude when configured, otherwise the built-in summary. Loaded on request, not on every refresh. */
+function Briefing() {
+  const [b, setB] = useState<{ text: string; engine: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setB(await api<{ text: string; engine: string }>('/assistant/briefing'));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="panel" style={{ background: '#fff' }}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <strong>Briefing</strong>
+        <button className="secondary" onClick={load} disabled={busy}>
+          {busy ? 'Writing…' : b ? 'Refresh' : 'Write a briefing'}
+        </button>
+      </div>
+      {error && <div className="error small">{error}</div>}
+      {b && (
+        <>
+          <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem' }}>{b.text}</div>
+          <div className="small muted">{b.engine === 'claude' ? 'Written by Claude from the figures below' : 'Built-in summary'}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Dashboard() {
   const { data, error } = useResource<DashboardData>('/dashboard', 10_000);
   return (
     <>
       <h1>Operations dashboard</h1>
       <ErrorBox error={error} />
+      <Briefing />
       {data && (
         <>
           <h2>Intake</h2>

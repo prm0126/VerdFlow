@@ -12,9 +12,12 @@
     "db:seed": "ts-node src/cli/seed.ts",
     "simulate": "ts-node src/cli/simulate.ts",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "archive": "ts-node src/cli/archive.ts",
+    "loadtest": "ts-node src/cli/loadtest.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.137.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
@@ -25,6 +28,7 @@
     "express": "^5.2.1",
     "helmet": "^8.0.0",
     "pg": "^8.13.1",
+    "prom-client": "^15.1.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "zod": "^3.24.1"
