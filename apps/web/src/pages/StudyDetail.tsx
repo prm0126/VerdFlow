@@ -13,6 +13,7 @@ interface Candidate {
   eligible: boolean;
   reasons: string[];
   loadRatio?: number;
+  clockedInAt?: string | null;
   rank?: number;
 }
 
@@ -22,7 +23,7 @@ interface Evaluation {
   facts: Record<string, unknown>;
   routing: { routing: { teamCode: string | null; ruleId: string | null; reasonCode: string; unknownRuleIds: string[] } | null };
   candidates: Candidate[];
-  continuity: { enabled?: boolean; scopeKey?: string; priorRadiologistId?: string | null; priorEligible?: boolean; priorReasons?: string[]; preserved?: boolean | null };
+  continuity: { enabled?: boolean; matchOn?: string; ranking?: string; scopeKey?: string; priorRadiologistId?: string | null; priorEligible?: boolean; priorReasons?: string[]; preserved?: boolean | null };
   outcome: string;
   reason_code: string;
   created_at: string;
@@ -307,6 +308,11 @@ export function StudyDetail() {
       {latest && latest.candidates.length > 0 && (
         <>
           <h2>Why this radiologist, and why not the others</h2>
+          <p className="small muted">
+            Order: same patient first
+            {latest.continuity.matchOn === 'team' ? ' (same patient and specialty)' : latest.continuity.enabled ? ' (same encounter)' : ' (off)'}, then{' '}
+            {latest.continuity.ranking === 'earliest_clock_in' ? 'whoever clocked in first' : 'least loaded'}.
+          </p>
           <table>
             <thead>
               <tr>
@@ -314,6 +320,7 @@ export function StudyDetail() {
                 <th>Radiologist</th>
                 <th>Eligible</th>
                 <th>Load</th>
+                <th>Clocked in</th>
                 <th>Reasons excluded</th>
               </tr>
             </thead>
@@ -327,6 +334,7 @@ export function StudyDetail() {
                   </td>
                   <td>{c.eligible ? <span className="badge good">Yes</span> : <span className="badge bad">No</span>}</td>
                   <td>{c.loadRatio !== undefined ? `${Math.round(c.loadRatio * 100)}%` : '—'}</td>
+                  <td>{c.clockedInAt ? new Date(c.clockedInAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                   <td>
                     {c.reasons.map((r) => (
                       <div key={r}>

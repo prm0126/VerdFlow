@@ -19,6 +19,7 @@ interface Row {
   on_shift: boolean;
   absence: string | null;
   shift_ends_at: string | null;
+  clocked_in_at: string | null;
   blockers: string[];
 }
 
@@ -117,6 +118,11 @@ export function Availability() {
               </td>
               <td>
                 {r.present ? <span className="badge good">Present</span> : <span className="badge grey">No recent heartbeat</span>}
+                {r.clocked_in_at && (
+                  <div className="small">
+                    Clocked in {new Date(r.clocked_in_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                )}
                 <div className="small muted">
                   <When value={r.heartbeat_at} />
                 </div>

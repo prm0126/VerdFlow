@@ -50,7 +50,12 @@ export function describe(c: Condition): string {
 }
 
 /** Rule sets saved before turnaround and peer review existed get the defaults. */
-const withDefaults = (d: Partial<RuleSetDefinition> | undefined): RuleSetDefinition => ({ ...EMPTY_RULE_SET, ...(d ?? {}) });
+const withDefaults = (d: Partial<RuleSetDefinition> | undefined): RuleSetDefinition => ({
+  ...EMPTY_RULE_SET,
+  ...(d ?? {}),
+  continuity: { ...EMPTY_RULE_SET.continuity, ...(d?.continuity ?? {}) },
+  ranking: { ...EMPTY_RULE_SET.ranking, ...(d?.ranking ?? {}) },
+});
 const PRIORITIES = ['STAT', 'URGENT', 'ROUTINE'] as const;
 
 function TatEditor({ def, onChange }: { def: RuleSetDefinition; onChange: (d: RuleSetDefinition) => void }) {
@@ -274,10 +279,27 @@ function Editor({ draft, onSaved }: { draft: RuleSetRow | null; onSaved: (r: Rul
         <textarea rows={24} value={json} onChange={(e) => setJson(e.target.value)} aria-label="Rule set JSON" />
       ) : (
         <>
+          <h3>Choosing the radiologist</h3>
           <label style={{ flexDirection: 'row', alignItems: 'center', gap: '0.5rem' }}>
-            <input type="checkbox" checked={def.continuity.enabled} onChange={(e) => setDef({ ...def, continuity: { enabled: e.target.checked } })} />
-            Prefer the same radiologist for the same patient (when they are eligible)
+            <input type="checkbox" checked={def.continuity.enabled} onChange={(e) => setDef({ ...def, continuity: { ...def.continuity, enabled: e.target.checked } })} />
+            Prefer the same radiologist for the same patient (only when they are eligible: on shift, not on a break, under capacity)
           </label>
+          <div className="row" style={{ margin: '0.5rem 0' }}>
+            <label>
+              "Same patient" means
+              <select value={def.continuity.matchOn} onChange={(e) => setDef({ ...def, continuity: { ...def.continuity, matchOn: e.target.value as 'encounter' | 'team' } })}>
+                <option value="encounter">the same encounter</option>
+                <option value="team">the same patient and specialty (team)</option>
+              </select>
+            </label>
+            <label>
+              Then give the study to
+              <select value={def.ranking.prefer} onChange={(e) => setDef({ ...def, ranking: { prefer: e.target.value as 'least_loaded' | 'earliest_clock_in' } })}>
+                <option value="least_loaded">the least loaded radiologist</option>
+                <option value="earliest_clock_in">whoever clocked in first this shift</option>
+              </select>
+            </label>
+          </div>
           <h3>Routing to a team (lowest priority number wins)</h3>
           {def.routing.map((r, i) => (
             <div className="panel" key={i} style={{ background: '#fff' }}>
@@ -474,7 +496,13 @@ export function Rules() {
                 {selected.note && <> · “{selected.note}”</>}
               </div>
               <p>
-                Same-patient continuity: {selected.definition.continuity.enabled ? 'on' : 'off'} · Peer review:{' '}
+                Same-patient continuity:{' '}
+                {withDefaults(selected.definition).continuity.enabled
+                  ? withDefaults(selected.definition).continuity.matchOn === 'team'
+                    ? 'on, same patient and specialty'
+                    : 'on, same encounter'
+                  : 'off'}{' '}
+                · Then: {withDefaults(selected.definition).ranking.prefer === 'earliest_clock_in' ? 'whoever clocked in first' : 'least loaded'} · Peer review:{' '}
                 {withDefaults(selected.definition).peerReview.enabled
                   ? `${withDefaults(selected.definition).peerReview.percent}% of final reports, up to ${withDefaults(selected.definition).peerReview.dailyCapPerReviewer} a day per reviewer`
                   : 'off'}

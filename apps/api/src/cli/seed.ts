@@ -101,14 +101,15 @@ async function main() {
       { code: 'NEURO', name: 'Neuroradiology' },
       { code: 'BODY', name: 'Body imaging' },
       { code: 'GENERAL', name: 'General reporting' },
+      { code: 'MSK', name: 'Musculoskeletal' },
     ]) {
       await save('teams', t);
     }
     const rads = [
-      { code: 'R001', fullName: 'Dr Asha Patel', grade: 'CONSULTANT', specialties: ['NEURO'], modalities: ['CT', 'MR'], teams: ['NEURO', 'GENERAL'] },
+      { code: 'R001', fullName: 'Dr Asha Patel', grade: 'CONSULTANT', specialties: ['NEURO', 'MSK'], modalities: ['CT', 'MR'], teams: ['NEURO', 'GENERAL', 'MSK'] },
       { code: 'R002', fullName: 'Dr Ben Okafor', grade: 'CONSULTANT', specialties: ['NEURO'], modalities: ['CT', 'MR'], teams: ['NEURO'] },
-      { code: 'R003', fullName: 'Dr Chloe Martin', grade: 'CONSULTANT', specialties: ['BODY'], modalities: ['CT', 'US', 'XR'], teams: ['BODY', 'GENERAL'] },
-      { code: 'R004', fullName: 'Dr Daniel Reyes', grade: 'REGISTRAR', specialties: ['BODY'], modalities: ['CT', 'US', 'XR'], teams: ['BODY'] },
+      { code: 'R003', fullName: 'Dr Chloe Martin', grade: 'CONSULTANT', specialties: ['BODY', 'MSK'], modalities: ['CT', 'US', 'XR'], teams: ['BODY', 'GENERAL', 'MSK'] },
+      { code: 'R004', fullName: 'Dr Daniel Reyes', grade: 'REGISTRAR', specialties: ['BODY', 'MSK'], modalities: ['CT', 'US', 'XR'], teams: ['BODY', 'MSK'] },
       { code: 'R005', fullName: 'Dr Emma Walsh', grade: 'CONSULTANT', specialties: [], modalities: ['XR', 'US'], teams: ['GENERAL'] },
       { code: 'R006', fullName: 'Dr Farid Khan', grade: 'REGISTRAR', specialties: [], modalities: ['XR'], teams: ['GENERAL'] },
     ];
@@ -200,6 +201,42 @@ async function main() {
       });
       await publishSeeded(definition, 'Demo starting rules');
       console.log('Published the demo rule set.');
+    }
+
+    // Example of the CT/MSK policy, submitted for approval rather than published: sign in as
+    // approver@verdflow.local and approve it on the Rules page to switch it on.
+    const mskExample = await one(pool, `SELECT 1 FROM rule_sets WHERE note LIKE 'Example: CT to MSK%'`);
+    const live = await one<{ definition: unknown }>(pool, `SELECT definition FROM rule_sets WHERE status = 'published'`);
+    if (!mskExample && live) {
+      const base = ruleSetDefinitionSchema.parse(live.definition);
+      const definition = ruleSetDefinitionSchema.parse({
+        ...base,
+        routing: [
+          ...base.routing.filter((r) => r.priority !== 5),
+          { id: 'ct-to-msk', name: 'All CT to musculoskeletal radiologists', priority: 5, when: { fact: 'study.modality', op: 'eq', value: 'CT' }, teamCode: 'MSK', reasonCode: 'CT_TO_MSK' },
+        ],
+        exclusions: [
+          ...base.exclusions,
+          {
+            id: 'ct-needs-msk',
+            name: 'CT only for radiologists with the MSK specialty',
+            when: { all: [{ fact: 'study.modality', op: 'eq', value: 'CT' }, { not: { fact: 'radiologist.specialties', op: 'contains', value: 'MSK' } }] },
+            reasonCode: 'CT_NEEDS_MSK',
+          },
+        ],
+        continuity: { enabled: true, matchOn: 'team' },
+        ranking: { prefer: 'earliest_clock_in' },
+      });
+      await withTransaction(pool, async (client) => {
+        const row = await one<{ id: string }>(
+          client,
+          `INSERT INTO rule_sets (version, status, definition, checksum, note, created_by, submitted_at)
+           VALUES ((SELECT coalesce(max(version), 0) + 1 FROM rule_sets), 'submitted', $1, $2, $3, $4, now()) RETURNING id`,
+          [JSON.stringify(definition), sha256(JSON.stringify(definition)), 'Example: CT to MSK radiologists, first clock-in first, same patient and specialty to the same radiologist', adminId],
+        );
+        await audit(client, { actorType: 'system', action: 'rules.submitted', entityType: 'rule_set', entityId: row!.id, detail: { seeded: true } });
+      });
+      console.log('Submitted the CT/MSK example rule set for approval (approve it as approver@verdflow.local on the Rules page).');
     }
 
     if (Object.keys(out).length) {

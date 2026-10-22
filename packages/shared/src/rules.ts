@@ -171,7 +171,22 @@ export const ruleSetDefinitionSchema = z
   .object({
     routing: z.array(routingRuleSchema).max(500),
     exclusions: z.array(exclusionRuleSchema).max(500),
-    continuity: z.object({ enabled: z.boolean() }).strict(),
+    continuity: z
+      .object({
+        enabled: z.boolean(),
+        /**
+         * What "the same patient" means for preferring the same radiologist:
+         * - encounter: same encounter number (or within the continuity window when there is none);
+         * - team: same patient and same specialty, meaning the team the study is routed to, within the window.
+         */
+        matchOn: z.enum(['encounter', 'team']).default('encounter'),
+      })
+      .strict(),
+    /** How to choose between eligible radiologists, after same-patient continuity. */
+    ranking: z
+      .object({ prefer: z.enum(['least_loaded', 'earliest_clock_in']).default('least_loaded') })
+      .strict()
+      .default({ prefer: 'least_loaded' }),
     tat: tatSchema.default({ warnAtPercent: 75, profiles: [] }),
     peerReview: peerReviewSchema.default({ enabled: false, percent: 0, dailyCapPerReviewer: 5 }),
   })
@@ -282,7 +297,8 @@ export function evaluateExclusions(def: RuleSetDefinition, facts: Facts): Exclus
 export const EMPTY_RULE_SET: RuleSetDefinition = {
   routing: [],
   exclusions: [],
-  continuity: { enabled: true },
+  continuity: { enabled: true, matchOn: 'encounter' },
+  ranking: { prefer: 'least_loaded' },
   tat: { warnAtPercent: 75, profiles: [] },
   peerReview: { enabled: false, percent: 0, dailyCapPerReviewer: 5 },
 };

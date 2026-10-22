@@ -596,4 +596,14 @@ CREATE INDEX intake_messages_ordering_seq_idx ON intake_messages (ordering_key, 
 DROP INDEX intake_messages_ordering_idx;
 `,
   },
+  {
+    version: 6,
+    name: 'clock_in',
+    sql: /* sql */ `
+-- When the radiologist started their current session: the first workstation heartbeat after a gap, or
+-- their own VerdFlow sign-in, whichever came first. Cleared when they go offline. Used to give work to
+-- whoever clocked in first when the rule set asks for it.
+ALTER TABLE radiologist_state ADD COLUMN clocked_in_at timestamptz;
+`,
+  },
 ];

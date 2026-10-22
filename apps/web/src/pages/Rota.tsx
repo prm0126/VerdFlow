@@ -204,7 +204,7 @@ export function Rota() {
             </div>
           </div>
           <div className="panel">
-            <h3 style={{ marginTop: 0 }}>Add leave or other absence</h3>
+            <h3 style={{ marginTop: 0 }}>Add leave, a planned break or other absence</h3>
             <div className="row">
               <label>
                 Radiologist
@@ -220,6 +220,7 @@ export function Rota() {
                 Type
                 <select value={absence.kind} onChange={(e) => setAbsence({ ...absence, kind: e.target.value })}>
                   <option value="leave">Leave</option>
+                  <option value="break">Break (planned, e.g. lunch)</option>
                   <option value="training">Training</option>
                   <option value="other">Other</option>
                 </select>
@@ -245,7 +246,7 @@ export function Rota() {
                 Add
               </button>
             </div>
-            <p className="small muted">Breaks are started and ended from the Availability page.</p>
+            <p className="small muted">No new work is given during any of these. Breaks can also be started and ended on the spot from the Availability page.</p>
           </div>
         </div>
       )}

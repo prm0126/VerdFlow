@@ -60,6 +60,15 @@ export class AuthService {
       [user.id, sha256(token), ip ?? null, userAgent?.slice(0, 300) ?? null, this.config.sessionHours],
     );
     await this.pool.query(`UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [user.id]);
+    // A radiologist signing in to VerdFlow counts as clocking in, unless they already have this session.
+    await this.pool.query(
+      `UPDATE radiologist_state st SET clocked_in_at = now(), updated_at = now()
+         FROM radiologists r
+        WHERE r.id = st.radiologist_id AND r.user_id = $1
+          AND (st.clocked_in_at IS NULL
+               OR st.clocked_in_at < coalesce((SELECT min(starts_at) FROM shifts sh WHERE sh.radiologist_id = r.id AND sh.starts_at <= now() AND sh.ends_at > now()), now()) - interval '1 hour')`,
+      [user.id],
+    );
     await audit(this.pool, { actorType: 'user', actorId: user.id, action: 'auth.login', ip });
     return { token };
   }

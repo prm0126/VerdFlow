@@ -46,6 +46,7 @@ interface CandidateRow {
   active_units: number | null;
   on_shift: boolean;
   absence: string | null;
+  clocked_in_at: string | null;
 }
 
 export interface CandidateTrace {
@@ -55,6 +56,8 @@ export interface CandidateTrace {
   eligible: boolean;
   reasons: string[];
   loadRatio?: number;
+  /** Clock-in time within the current shift, if any. */
+  clockedInAt?: string | null;
   rank?: number;
 }
 
@@ -134,7 +137,10 @@ export async function allocate(client: PoolClient, study: StudyRow, config: AppC
 
   // Patient continuity guard. Created if absent, then locked, so two first studies for the same
   // patient cannot both see "no previous radiologist" at the same time.
-  const scopeKey = study.encounter_number ? `enc:${study.encounter_number}` : 'window';
+  // "Same patient" is the same encounter, or (when the rule set says so) the same patient and specialty:
+  // the team the study is routed to. Both use the continuity window when there is no encounter.
+  const scopeKey =
+    def.continuity.matchOn === 'team' ? `team:${routing.teamCode}` : study.encounter_number ? `enc:${study.encounter_number}` : 'window';
   await client.query(
     `INSERT INTO patient_affinity (patient_id, scope_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [study.patient_id, scopeKey],
@@ -147,22 +153,33 @@ export async function allocate(client: PoolClient, study: StudyRow, config: AppC
     [study.patient_id, scopeKey, config.continuityWindowHours],
   );
   const priorRadiologistId =
-    def.continuity.enabled && affinity?.radiologist_id && (scopeKey !== 'window' || affinity.recent) ? affinity.radiologist_id : null;
+    def.continuity.enabled && affinity?.radiologist_id && (scopeKey.startsWith('enc:') || affinity.recent) ? affinity.radiologist_id : null;
 
   const units = await workUnits(client, study);
   const rejected = await destinationRejections(client, study.id);
   const rows = await candidateRows(client, routing.teamCode, study, null);
   const traces = rows.map((r) => assess(r, def, facts, units, config, rejected));
   const eligible = traces.filter((t) => t.eligible);
+  // Order: the same patient's radiologist first; then, if the rule set prefers it, whoever clocked in
+  // first this shift (no clock-in counts as last); then the least loaded; then by code, so ties are stable.
+  const byClockIn = def.ranking.prefer === 'earliest_clock_in';
+  const clockIn = (t: CandidateTrace) => (t.clockedInAt ? new Date(t.clockedInAt).getTime() : Number.MAX_SAFE_INTEGER);
   eligible.sort((a, b) => {
     const pa = a.radiologistId === priorRadiologistId ? 0 : 1;
     const pb = b.radiologistId === priorRadiologistId ? 0 : 1;
-    return pa - pb || (a.loadRatio ?? 0) - (b.loadRatio ?? 0) || a.code.localeCompare(b.code);
+    return (
+      pa - pb ||
+      (byClockIn ? clockIn(a) - clockIn(b) : 0) ||
+      (a.loadRatio ?? 0) - (b.loadRatio ?? 0) ||
+      a.code.localeCompare(b.code)
+    );
   });
   eligible.forEach((t, i) => (t.rank = i + 1));
 
   const continuity: Record<string, unknown> = {
     enabled: def.continuity.enabled,
+    matchOn: def.continuity.matchOn,
+    ranking: def.ranking.prefer,
     scopeKey,
     priorRadiologistId,
   };
@@ -253,7 +270,11 @@ function candidateRows(client: PoolClient, teamCode: string, study: StudyRow, ra
                      WHERE rh.radiologist_id = r.id AND rh.hospital_id = $3) AS has_hospital,
             st.status, extract(epoch FROM now() - st.heartbeat_at)::float AS heartbeat_age_s,
             st.capacity_units, st.active_units,
-            ${onShiftNow('r.id')} AS on_shift, ${absenceNow('r.id')} AS absence
+            ${onShiftNow('r.id')} AS on_shift, ${absenceNow('r.id')} AS absence,
+            -- a clock-in only counts for the shift it belongs to (from an hour before the shift starts)
+            CASE WHEN st.clocked_in_at >= (SELECT min(sh.starts_at) FROM shifts sh WHERE sh.radiologist_id = r.id
+                                             AND sh.starts_at <= now() AND sh.ends_at > now()) - interval '1 hour'
+                 THEN st.clocked_in_at END AS clocked_in_at
        FROM teams t
        JOIN team_members tm ON tm.team_id = t.id
                            AND tm.valid_from <= CURRENT_DATE AND (tm.valid_to IS NULL OR tm.valid_to >= CURRENT_DATE)
@@ -332,6 +353,7 @@ function assess(r: CandidateRow, def: RuleSetDefinition, facts: Facts, units: nu
     eligible: reasons.length === 0,
     reasons,
     loadRatio: capacity > 0 ? Math.round((active / capacity) * 1000) / 1000 : undefined,
+    clockedInAt: r.clocked_in_at,
   };
 }
 
