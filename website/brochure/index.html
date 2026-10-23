@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="VerdFlow teleradiology workflow orchestrator: every screen and feature.">
+<title>VerdFlow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a teal masthead band, then one long editorial column of screens; each screen is a figure
+   with its description beside it on wide displays and under it on phones. */
+:root {
+  --bg: #ffffff;
+  --surface: #f3f8f7;
+  --ink: #15302d;
+  --muted: #56706c;
+  --line: #d7e5e2;
+  --teal: #0f766e;
+  --teal-deep: #0b4f4a;
+  --teal-soft: #ccfbf1;
+  --on-teal: #ffffff;
+  --code-bg: #0f1f1e;
+  --code-fg: #d6fff9;
+  --code-key: #5eead4;
+  --shadow: 0 1px 2px rgb(11 79 74 / 0.08), 0 8px 24px rgb(11 79 74 / 0.08);
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1615; --surface: #13211f; --ink: #e3f2ef; --muted: #9db8b3; --line: #24403c;
+    --teal: #2dd4bf; --teal-deep: #0b4f4a; --teal-soft: #134e48; --on-teal: #ffffff;
+    --code-bg: #071110; --code-fg: #d6fff9; --code-key: #5eead4;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c1615; --surface: #13211f; --ink: #e3f2ef; --muted: #9db8b3; --line: #24403c;
+  --teal: #2dd4bf; --teal-deep: #0b4f4a; --teal-soft: #134e48; --on-teal: #ffffff;
+  --code-bg: #071110; --code-fg: #d6fff9; --code-key: #5eead4;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 17px/1.6 var(--body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h2 { font-size: clamp(1.7rem, 3.2vw, 2.4rem); letter-spacing: -0.01em; }
+h3 { font-size: 1.35rem; }
+p { margin: 0; max-width: 65ch; }
+a { color: var(--teal); }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.eyebrow { font: 600 0.78rem/1 var(--body); letter-spacing: 0.12em; text-transform: uppercase; color: var(--teal); }
+:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+
+/* Masthead */
+.mast { background: var(--teal-deep); color: var(--on-teal); }
+.mast .wrap { padding-block: 64px 56px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 48px; align-items: center; }
+.mast .eyebrow { color: #99f6e4; }
+.mast h1 { font-size: clamp(2.6rem, 6vw, 4.4rem); margin-block: 14px 18px; letter-spacing: -0.02em; }
+.mast .lede { font-size: 1.2rem; color: #e6fffb; }
+.mast .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+.mast .facts span { border: 1px solid rgb(255 255 255 / 0.35); border-radius: 999px; padding: 4px 12px; font-size: 0.9rem; color: #e6fffb; }
+.hl7card { background: var(--code-bg); color: var(--code-fg); border-radius: 12px; padding: 18px 20px; font: 0.82rem/1.75 var(--mono); overflow-x: auto; box-shadow: 0 12px 40px rgb(0 0 0 / 0.3); min-width: 0; }
+.hl7card b { color: var(--code-key); font-weight: 500; }
+.hl7card .arrow { display: block; color: #99f6e4; margin-block: 8px; font-family: var(--body); font-size: 0.9rem; }
+
+/* Flow */
+.flow { padding-block: 64px 24px; }
+.flow ol { list-style: none; margin: 28px 0 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; counter-reset: step; }
+.flow li { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; counter-increment: step; }
+.flow li::before { content: counter(step); display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--teal); color: var(--bg); font: 700 0.9rem/1 var(--display); margin-bottom: 10px; }
+.flow li strong { display: block; font-family: var(--display); font-size: 1.05rem; margin-bottom: 4px; }
+.flow li span { font-size: 0.92rem; color: var(--muted); }
+
+/* Contents */
+.toc { padding-block: 24px 8px; }
+.toc nav { display: flex; flex-wrap: wrap; gap: 8px 10px; margin-top: 14px; }
+.toc a { text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; font-size: 0.95rem; color: var(--ink); }
+.toc a:hover { border-color: var(--teal); color: var(--teal); }
+
+/* Sections and screens */
+section.group { padding-block: 56px 8px; border-top: 1px solid var(--line); margin-top: 40px; }
+section.group > .intro { display: grid; gap: 10px; margin-bottom: 36px; }
+section.group > .intro p { color: var(--muted); font-size: 1.08rem; }
+.screen { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 36px; align-items: start; margin-bottom: 64px; }
+.screen.flip { grid-template-columns: minmax(0, 1fr) minmax(0, 1.55fr); }
+.screen.flip figure { order: 2; }
+figure { margin: 0; min-width: 0; }
+figure button { all: unset; cursor: zoom-in; display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow); background: var(--surface); }
+figure button:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+figure img { display: block; width: 100%; height: auto; }
+figure figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 8px; }
+.copy { display: grid; gap: 14px; min-width: 0; }
+.copy .where { font: 500 0.82rem/1.3 var(--mono); color: var(--muted); }
+.copy ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 6px; }
+.copy li::marker { color: var(--teal); }
+.copy .note { background: var(--surface); border-left: 3px solid var(--teal); padding: 10px 14px; border-radius: 0 8px 8px 0; font-size: 0.95rem; }
+.login-shot { max-width: 440px; }
+
+/* Safety and status */
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.cols > div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 8px; align-content: start; }
+.cols h3 { font-size: 1.08rem; }
+.cols p { font-size: 0.95rem; color: var(--muted); }
+table.status { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+table.status th, table.status td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.status th { font: 600 0.8rem/1.2 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.tablewrap { overflow-x: auto; }
+.pill { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
+.pill.ready { background: var(--teal-soft); color: var(--teal-deep); }
+.pill.next { background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
+:root[data-theme="dark"] .pill.ready { color: #ccfbf1; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pill.ready { color: #ccfbf1; } }
+
+footer { border-top: 1px solid var(--line); margin-top: 56px; }
+footer .wrap { padding-block: 28px 40px; color: var(--muted); font-size: 0.92rem; display: grid; gap: 6px; }
+
+/* Lightbox */
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgb(6 20 19 / 0.88); display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); cursor: zoom-out; }
+.lightbox img { max-width: min(1400px, 100%); max-height: 100%; border-radius: 8px; box-shadow: 0 20px 60px rgb(0 0 0 / 0.5); }
+.lightbox p { color: #e6fffb; margin-top: 10px; text-align: center; max-width: none; }
+
+@media (max-width: 900px) {
+  .mast .wrap { grid-template-columns: minmax(0, 1fr); padding-block: 44px 40px; }
+  .flow ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .screen, .screen.flip { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .screen.flip figure { order: 0; }
+  .cols { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  figure button img { transition: transform 0.25s ease; }
+  figure button:hover img { transform: scale(1.012); }
+}
+</style>
+<style>body{margin:0}</style>
+</head>
+<body>
+
+<header class="mast">
+  <div class="wrap">
+    <div>
+      <div class="eyebrow">Teleradiology workflow orchestrator</div>
+      <h1>VerdFlow</h1>
+      <p class="lede">Takes imaging orders as HL7 from the hospital, decides which radiologist should report each study using rules your team approves, sends the assignment to the reporting system, and follows the study until the final report.</p>
+      <div class="facts">
+        <span>HL7 v2 in and out through Mirth</span>
+        <span>Rota, breaks and clock-in respected</span>
+        <span>Every decision explained</span>
+        <span>Audited end to end</span>
+      </div>
+    </div>
+    <div class="hl7card" aria-label="An HL7 order coming in and the assignment going out">
+      <b>MSH</b>|^~\&amp;|RIS|CITYH|VERDFLOW|…|ORM^O01|MSG0001<br>
+      <b>PID</b>|1||MRN123^^^CITYH^MR<br>
+      <b>ORC</b>|NW|PL1|ACC1<br>
+      <b>OBR</b>|1|PL1|ACC1|CTCAP^CT chest abdomen pelvis|…|CT
+      <span class="arrow">↓ rules: CT → MSK team · first clock-in · same patient, same doctor</span>
+      <b>ORC</b>|XO||ACC1<br>
+      <b>ZAS</b>|a6f1…|1|EXT-R001^Dr Asha Patel|MSK|2|ASSIGNED<br>
+      <b>MSA</b>|AA|VF0000000389 <span style="color:#99f6e4">← destination accepted</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <section class="flow" aria-labelledby="flow-h">
+      <div class="eyebrow">How a study moves through VerdFlow</div>
+      <h2 id="flow-h" style="margin-top:10px">From order to peer review, in one traceable path</h2>
+      <ol>
+        <li><strong>Receive</strong><span>The hospital's Mirth sends the order. VerdFlow stores it before it acknowledges it, so nothing is lost.</span></li>
+        <li><strong>Vet</strong><span>Services that need vetting wait for a radiologist to approve a protocol.</span></li>
+        <li><strong>Decide</strong><span>Approved rules pick the team and check every radiologist: shift, break, privileges, capacity.</span></li>
+        <li><strong>Assign</strong><span>The chosen radiologist is reserved and the assignment goes out as HL7 to the reporting system.</span></li>
+        <li><strong>Report</strong><span>Accept, decline, preliminary and final come back. A decline is routed again at once.</span></li>
+        <li><strong>Review</strong><span>Turnaround is tracked, and a share of final reports goes to an independent peer reviewer.</span></li>
+      </ol>
+    </section>
+
+    <section class="toc" aria-label="Contents">
+      <div class="eyebrow">The screens</div>
+      <nav>
+        <a href="#operations">Operations</a>
+        <a href="#clinical">Clinical work</a>
+        <a href="#assistant">Assistant</a>
+        <a href="#people">People and rota</a>
+        <a href="#rules">Rules and masters</a>
+        <a href="#integration">HL7 integration</a>
+        <a href="#governance">Access and audit</a>
+        <a href="#status">What is ready</a>
+      </nav>
+    </section>
+
+    <!-- Operations -->
+    <section class="group" id="operations" aria-labelledby="operations-h">
+      <div class="intro">
+        <div class="eyebrow">Operations</div>
+        <h2 id="operations-h">See the whole service at a glance, and every study in detail</h2>
+        <p>For reporting coordinators: what needs attention now, where every study is, and exactly why each one went where it did.</p>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/02-dashboard.png" aria-label="Enlarge: Operations dashboard"><img src="img/02-dashboard.png" alt="Operations dashboard with a written briefing and tiles for intake, escalations, studies and delivery" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Operations dashboard</h3>
+          <div class="where">Menu → Dashboard</div>
+          <p>One page for the state of the service, refreshed every 10 seconds.</p>
+          <ul>
+            <li><strong>Briefing</strong>: a short written summary that leads with what needs action now.</li>
+            <li>Intake: messages in the last hour, backlog and its age, quarantined messages, reused control IDs.</li>
+            <li>Needs attention: open and unacknowledged escalations, overdue and at-risk turnaround, vetting waiting.</li>
+            <li>Studies by stage, final reports in 24 hours, radiologists available now.</li>
+            <li>Delivery to the third party: waiting, uncertain, failed or rejected.</li>
+            <li>Same-patient continuity kept or broken, and why studies need a coordinator.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure><button type="button" data-full="img/04-worklist.png" aria-label="Enlarge: Worklist"><img src="img/04-worklist.png" alt="Worklist of studies with priority, team, radiologist, turnaround status and state" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Worklist</h3>
+          <div class="where">Menu → Worklist</div>
+          <p>Every study, newest first, filtered by state or searched by accession.</p>
+          <ul>
+            <li>Priority shown as STAT, Urgent or Routine.</li>
+            <li>The team and the radiologist who has it now, or who reported it.</li>
+            <li><strong>Turnaround</strong>: on time, at risk or overdue, with the time it is due.</li>
+            <li>State in plain words: waiting for vetting, sent, accepted by radiologist, preliminary, final.</li>
+            <li>Patient details are masked for anyone without permission to see them.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/05-study.png" aria-label="Enlarge: Study page"><img src="img/05-study.png" alt="Study page with a plain-English explanation, the messages received and the routing decision" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Study page</h3>
+          <div class="where">Worklist → click a study</div>
+          <p>The full story of one study on one page.</p>
+          <ul>
+            <li><strong>Explain in plain English</strong>: a short written account of where the study is and why.</li>
+            <li>What came in: each HL7 message for this study and what happened to it.</li>
+            <li>The decision: rule-set version, the rule that chose the team, the radiologist selected.</li>
+            <li>Coordinator actions: <strong>Route again</strong>, <strong>Reassign</strong> (before a report exists) and <strong>Cancel</strong>, each with a reason and audited.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure><button type="button" data-full="img/05b-study-trace.png" aria-label="Enlarge: Decision trace"><img src="img/05b-study-trace.png" alt="Turnaround clocks and the table of candidate radiologists with load, clock-in time and reasons excluded" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Why this radiologist, and why not the others</h3>
+          <div class="where">Study page, further down</div>
+          <p>Every candidate is listed with their rank, load, clock-in time and the exact reason anyone was left out, such as <code>AT_CAPACITY</code>, <code>ON_BREAK</code>, <code>NO_SHIFT</code> or <code>RULE_CT_NEEDS_MSK</code>.</p>
+          <ul>
+            <li>The order used is stated: same patient first, then whoever clocked in first (or least loaded).</li>
+            <li>Turnaround clocks show each target, the rule version it came from, and met, late or due.</li>
+            <li>Assignments, what was sent with each delivery attempt, and the full history.</li>
+          </ul>
+          <p class="note">Past decisions stay explainable after rules change: each one records the facts and rule version it used.</p>
+        </div>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/07-escalations.png" aria-label="Enlarge: Escalations"><img src="img/07-escalations.png" alt="Escalations list with overdue, at-risk and needs-a-coordinator items and acknowledge buttons" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Escalations</h3>
+          <div class="where">Menu → Escalations</div>
+          <p>Raised automatically, closed automatically.</p>
+          <ul>
+            <li><strong>Overdue</strong> and <strong>At risk</strong> when a turnaround target is passed or close.</li>
+            <li><strong>Needs a coordinator</strong> when nobody eligible could take a study, or a room or delivery problem holds it.</li>
+            <li>Coordinators <strong>Acknowledge</strong> so the team can see someone has it.</li>
+            <li>Each closes by itself when the step is done or the study moves on, with the reason recorded.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure><button type="button" data-full="img/12-errors.png" aria-label="Enlarge: Errors and reconciliation"><img src="img/12-errors.png" alt="Errors page with delivery problems, quarantined messages and reused control IDs" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Errors and reconciliation</h3>
+          <div class="where">Menu → Errors</div>
+          <ul>
+            <li><strong>Delivery problems</strong>: failed, rejected or uncertain sends, with "may have arrived" when the destination might already hold it. Retry resends the same message under the same control ID.</li>
+            <li><strong>Quarantined messages</strong> with the reason, for example an unknown modality. Fix the master record, then <strong>Process again</strong>.</li>
+            <li><strong>Control ID reused with different content</strong>: kept, never processed, until someone has investigated.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Clinical -->
+    <section class="group" id="clinical" aria-labelledby="clinical-h">
+      <div class="intro">
+        <div class="eyebrow">Clinical work</div>
+        <h2 id="clinical-h">Vetting before routing, peer review after reporting</h2>
+        <p>For radiologists: the requests waiting for a protocol, and the reviews assigned to them.</p>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/06-vetting.png" aria-label="Enlarge: Vetting"><img src="img/06-vetting.png" alt="Vetting queue with protocol choices and approve or do-not-approve buttons" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Vetting</h3>
+          <div class="where">Menu → Vetting · radiologists</div>
+          <ul>
+            <li>Services marked "needs vetting" (MR brain in the demo) wait here, STAT first.</li>
+            <li><strong>Approve</strong> with a protocol from the service's list: the study is routed straight away.</li>
+            <li><strong>Do not approve</strong> with a reason: the workflow ends and later updates are ignored.</li>
+            <li>The vetting wait has its own turnaround target and escalates when overdue.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure><button type="button" data-full="img/08-peer-review.png" aria-label="Enlarge: Peer review"><img src="img/08-peer-review.png" alt="Peer review page for a radiologist with summary figures and an open review to record" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Peer review</h3>
+          <div class="where">Menu → Peer review</div>
+          <ul>
+            <li>A set share of final reports is chosen for review (20% in the demo). The same study is always in or out of the sample, so retries never change it.</li>
+            <li>The reviewer is never the original reporter, must hold the privilege for that modality and hospital, and has a daily limit.</li>
+            <li>When nobody can take a review it is recorded as skipped, with the reason.</li>
+            <li>Only the assigned reviewer can record the outcome: agree, minor or major discrepancy.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Assistant -->
+    <section class="group" id="assistant" aria-labelledby="assistant-h">
+      <div class="intro">
+        <div class="eyebrow">Assistant</div>
+        <h2 id="assistant-h">Ask in your own words: "What is scheduled under my name?"</h2>
+        <p>A read-only assistant inside VerdFlow. It answers from VerdFlow's own data, with the person's own permissions.</p>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/03-assistant.png" aria-label="Enlarge: Assistant"><img src="img/03-assistant.png" alt="Assistant answering a radiologist's question about their schedule and their assigned studies" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Assistant</h3>
+          <div class="where">Menu → Assistant</div>
+          <ul>
+            <li>Your rota: shifts, leave and breaks under your name, and whether you can take new work right now.</li>
+            <li>Your work: studies assigned to you with turnaround, your open peer reviews, vetting waiting.</li>
+            <li>The team: who is on shift. A study by accession. Turnaround performance. Open escalations.</li>
+            <li>Also: <strong>Explain in plain English</strong> on study pages, the dashboard <strong>Briefing</strong>, and <strong>drafting rules from a description</strong> for a person to review.</li>
+          </ul>
+          <p class="note">It reads but never changes anything, and never sees patient names or identifiers. Without an AI key it answers common questions from built-in templates. With Claude connected it handles free-form questions.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- People -->
+    <section class="group" id="people" aria-labelledby="people-h">
+      <div class="intro">
+        <div class="eyebrow">People and rota</div>
+        <h2 id="people-h">Work only goes to people who are on shift, present and free</h2>
+        <p>Schedules, breaks and clock-in are part of every decision, not a separate list.</p>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/13-availability.png" aria-label="Enlarge: Availability"><img src="img/13-availability.png" alt="Availability table with teams, whether each radiologist can take new work, presence, clock-in time and load" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Availability</h3>
+          <div class="where">Menu → Availability</div>
+          <ul>
+            <li><strong>Can take new work</strong>, or exactly why not: not on shift, on a break, no workstation heartbeat, at capacity.</li>
+            <li><strong>Clocked in</strong> time: the first workstation heartbeat of the session or the radiologist's own sign-in.</li>
+            <li>Start or end a break on the spot; change status and capacity (work units).</li>
+            <li>Changing status never withdraws work a radiologist already holds.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure><button type="button" data-full="img/14-rota.png" aria-label="Enlarge: Rota"><img src="img/14-rota.png" alt="Weekly rota with shifts per radiologist and forms to add a shift or an absence" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Rota</h3>
+          <div class="where">Menu → Rota</div>
+          <ul>
+            <li>A week view of shifts (reporting or on call), leave, training and breaks.</li>
+            <li>Plan breaks ahead, such as lunch 13:00–13:30. Nothing is allocated during a break.</li>
+            <li>Overlapping shifts and leave without an end date are refused. Every change is audited.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/18-users.png" aria-label="Enlarge: Users"><img src="img/18-users.png" alt="Users page with roles, status and password-link buttons" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Users</h3>
+          <div class="where">Menu → Users · administrators</div>
+          <ul>
+            <li>Add people with roles: administrator, coordinator, radiologist, rule author, rule approver, integration engineer, viewer.</li>
+            <li>Each new user gets a single-use link to set their own password, valid for 72 hours. Passwords are never emailed or shown.</li>
+            <li>Changing roles or suspending someone signs them out everywhere at once.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Rules -->
+    <section class="group" id="rules" aria-labelledby="rules-h">
+      <div class="intro">
+        <div class="eyebrow">Rules and masters</div>
+        <h2 id="rules-h">Your allocation policy, written down and approved</h2>
+        <p>Routing, exclusions, continuity, ranking, turnaround targets and peer review live in one versioned rule set. A different person must approve every change.</p>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/15-rules.png" aria-label="Enlarge: Rules"><img src="img/15-rules.png" alt="Published rule set showing continuity, ranking, turnaround targets, routing rules and exclusions" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Rules</h3>
+          <div class="where">Menu → Rules</div>
+          <ul>
+            <li>Routing to a team, lowest priority number first: "All CT to musculoskeletal radiologists".</li>
+            <li>Exclusions: "CT only for radiologists with the MSK specialty", "STAT studies go to consultants only".</li>
+            <li>Same patient, same doctor: by encounter, or by patient and specialty.</li>
+            <li>Then: the least loaded radiologist, or whoever clocked in first this shift.</li>
+            <li>Turnaround targets per priority, and the peer-review share and daily limit.</li>
+          </ul>
+          <p class="note">Draft → submit → approved by someone else → published. The previous version is retired, never overwritten.</p>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure><button type="button" data-full="img/16-rule-editor.png" aria-label="Enlarge: Rule editor"><img src="img/16-rule-editor.png" alt="Rule editor with a box to describe a change and the settings for choosing the radiologist" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Rule editor</h3>
+          <div class="where">Rules → New draft</div>
+          <ul>
+            <li>Basic view: pick a fact, an operator and a value. No code, no formulas.</li>
+            <li>Advanced view: the same rule set as JSON, checked by the same validation.</li>
+            <li>Describe a change in plain words and Claude proposes the rules for you to check. Nothing is saved until you do.</li>
+            <li>Missing data never counts as a match, and unclear cases exclude rather than include.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/17-masters.png" aria-label="Enlarge: Masters"><img src="img/17-masters.png" alt="Masters page on the Radiologists tab with specialties, privileges, hospitals and teams" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Masters</h3>
+          <div class="where">Menu → Masters</div>
+          <ul>
+            <li>Hospitals, rooms (with allowed modalities and open or closed), modalities and work units, services and vetting protocols.</li>
+            <li>Teams, employees, and radiologists: specialties, modality privileges, hospitals, teams, capacity.</li>
+            <li>Integration partners: source, reporting or presence, allowed facilities, send limits and API keys.</li>
+            <li>Withdrawing a privilege takes effect immediately, even for a decision being made at that moment.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Integration -->
+    <section class="group" id="integration" aria-labelledby="integration-h">
+      <div class="intro">
+        <div class="eyebrow">HL7 integration</div>
+        <h2 id="integration-h">Every message in and out, readable field by field</h2>
+        <p>For integration engineers: the full message log, and a safe way to send test messages through the real intake path.</p>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/09-hl7-received.png" aria-label="Enlarge: HL7 messages received"><img src="img/09-hl7-received.png" alt="Received HL7 messages with one opened, showing segments and the PID fields" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>HL7 messages: received</h3>
+          <div class="where">Menu → HL7 messages → Received</div>
+          <ul>
+            <li>Every message from every partner: time, type, control ID, study, and the result (processed, ignored or quarantined with the reason).</li>
+            <li><strong>View</strong> shows one segment per line; click a segment to see its numbered fields: <code>PID-3</code>, <code>OBR-24</code>.</li>
+            <li>Opening a message is recorded in the audit log.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure><button type="button" data-full="img/10-hl7-sent.png" aria-label="Enlarge: HL7 messages sent"><img src="img/10-hl7-sent.png" alt="Messages sent to the third party with study, radiologist, delivery state and ACK" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>HL7 messages: sent to the third party</h3>
+          <div class="where">Menu → HL7 messages → Sent to third party</div>
+          <ul>
+            <li>Every assignment and cancellation, with the study, radiologist, delivery state and ACK code.</li>
+            <li>Each attempt is listed. A lost ACK is treated as "delivery uncertain", never as permission to send a conflicting assignment.</li>
+            <li>One slow destination cannot hold up the others: each has its own in-flight limit.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/11-hl7-send.png" aria-label="Enlarge: Send a message"><img src="img/11-hl7-send.png" alt="Send-a-message form with a filled-in new order and its preview" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Send a message</h3>
+          <div class="where">Menu → HL7 messages → Send a message</div>
+          <ul>
+            <li>Start from a template: new order, cancel, or a radiologist's accept, decline, preliminary or final for a study's current assignment.</li>
+            <li>Edit it, choose the partner, and send. You see the acknowledgment a real partner would get.</li>
+            <li>It goes through exactly the same checks as a message from Mirth, and every send is audited.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Governance -->
+    <section class="group" id="governance" aria-labelledby="governance-h">
+      <div class="intro">
+        <div class="eyebrow">Access and audit</div>
+        <h2 id="governance-h">Who did what, and when</h2>
+      </div>
+
+      <div class="screen">
+        <figure><button type="button" data-full="img/19-audit.png" aria-label="Enlarge: Audit log"><img src="img/19-audit.png" alt="Audit log with time, person, action and record" loading="lazy" width="1400" height="880"></button></figure>
+        <div class="copy">
+          <h3>Audit log</h3>
+          <div class="where">Menu → Audit log · administrators</div>
+          <ul>
+            <li>Sign-ins and failed attempts, rule changes and approvals, rota and availability changes.</li>
+            <li>Every raw HL7 view, manual send, reassignment, cancellation and master-data change.</li>
+            <li>Entries cannot be edited or deleted, by anyone.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen flip">
+        <figure class="login-shot"><button type="button" data-full="img/01-login.png" aria-label="Enlarge: Sign in"><img src="img/01-login.png" alt="VerdFlow sign-in panel" loading="lazy" width="500" height="431"></button></figure>
+        <div class="copy">
+          <h3>Sign in</h3>
+          <ul>
+            <li>Each person sees only the menu items their role allows.</li>
+            <li>Accounts lock for 15 minutes after five wrong passwords, and sign-in attempts are rate limited.</li>
+            <li>Sessions use secure, HTTP-only cookies and every change needs a same-site request header.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="group" aria-labelledby="safety-h">
+      <div class="intro">
+        <div class="eyebrow">Built in</div>
+        <h2 id="safety-h">What VerdFlow will not do</h2>
+      </div>
+      <div class="cols">
+        <div><h3>Lose an order</h3><p>An order is acknowledged only after it is stored. A retried message is recognised and processed once.</p></div>
+        <div><h3>Double-book a study</h3><p>One active assignment per study, and capacity is checked again, under a lock, at the moment of reserving.</p></div>
+        <div><h3>Ignore the rota</h3><p>No shift, a break, leave, stale presence or full capacity means no new work. Each is named in the trace.</p></div>
+        <div><h3>Guess on missing data</h3><p>A rule that cannot be checked excludes the radiologist rather than including them.</p></div>
+        <div><h3>Send conflicting HL7</h3><p>A retry reuses the same control ID. A cancellation never overtakes its assignment.</p></div>
+        <div><h3>Change rules quietly</h3><p>A second person approves every rule set, and each decision keeps the version it used.</p></div>
+      </div>
+    </section>
+
+    <section class="group" id="status" aria-labelledby="status-h">
+      <div class="intro">
+        <div class="eyebrow">Where it stands</div>
+        <h2 id="status-h">What is ready, and what comes next</h2>
+        <p>Measured on one 4-core machine: 100 orders a second accepted with acknowledgments under 25 ms (95th percentile) and a radiologist chosen within about 0.8 seconds. That is a single-machine figure, not a national capacity result.</p>
+      </div>
+      <div class="tablewrap">
+        <table class="status">
+          <thead><tr><th>Area</th><th>Status</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>HL7 intake, rules, allocation, outbound HL7, ACK tracking</td><td><span class="pill ready">Ready for a pilot</span></td><td>Message layouts for the assignment and replies are a proposal until the interface specification is signed with the third party.</td></tr>
+            <tr><td>Rota, breaks, clock-in, continuity, vetting, peer review, turnaround, escalations</td><td><span class="pill ready">Ready for a pilot</span></td><td>Handover between shifts and recurring rota patterns are still to do.</td></tr>
+            <tr><td>Assistant</td><td><span class="pill ready">Ready for a pilot</span></td><td>Built-in answers work with no setup. Claude needs a data-processing agreement and residency approval for the deployment.</td></tr>
+            <tr><td>Monitoring, archive, deployment files</td><td><span class="pill ready">Ready for a pilot</span></td><td>Health, readiness and Prometheus metrics; Docker and Kubernetes files.</td></tr>
+            <tr><td>National scale (100,000 messages a second)</td><td><span class="pill next">Next phase</span></td><td>Needs Kafka, several database clusters, Temporal and load tests on your real message mix.</td></tr>
+            <tr><td>Single sign-on and MFA</td><td><span class="pill next">Next phase</span></td><td>Local accounts with lockout today.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>Screens show synthetic demo data: City Hospital, six demo radiologists and test patients. No real patient data appears.</div>
+    <div>Tap any screen to see it full size.</div>
+  </div>
+</footer>
+
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Screen, full size">
+  <div>
+    <img id="lightbox-img" alt="">
+    <p id="lightbox-cap"></p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var box = document.getElementById('lightbox');
+  var img = document.getElementById('lightbox-img');
+  var cap = document.getElementById('lightbox-cap');
+  var opener = null;
+  document.querySelectorAll('figure button[data-full]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      opener = b;
+      img.src = b.getAttribute('data-full');
+      var inner = b.querySelector('img');
+      img.alt = inner ? inner.alt : '';
+      cap.textContent = (b.getAttribute('aria-label') || '').replace(/^Enlarge: /, '') + ' · tap or press Esc to close';
+      box.hidden = false;
+      box.focus();
+    });
+  });
+  function close() {
+    box.hidden = true;
+    img.removeAttribute('src');
+    if (opener) opener.focus();
+  }
+  box.tabIndex = -1;
+  box.addEventListener('click', close);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !box.hidden) close(); });
+})();
+</script>
+</body>
+</html>
