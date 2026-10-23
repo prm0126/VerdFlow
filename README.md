@@ -61,6 +61,9 @@ peer reviews.
 Where to set who gets which study (CT to MSK, schedule, breaks, first clock-in, same patient and
 specialty): [docs/allocation-settings.md](docs/allocation-settings.md).
 
+See every HL7 message received and sent, and send one by hand: **HL7 messages** in the menu
+([docs/hl7-messages.md](docs/hl7-messages.md)).
+
 ## Assistant
 
 Open **Assistant** and ask, for example, "What is scheduled under my name?". It works without an API key

@@ -15,6 +15,7 @@ import { SetPassword } from './pages/SetPassword';
 import { Users } from './pages/Users';
 import { Assistant } from './pages/Assistant';
 import { Escalations } from './pages/Escalations';
+import { Messages } from './pages/Messages';
 import { PeerReview } from './pages/PeerReview';
 import { Vetting } from './pages/Vetting';
 
@@ -63,6 +64,7 @@ export function App() {
           {can('vetting.perform') && <NavLink to="/vetting">Vetting</NavLink>}
           <NavLink to="/escalations">Escalations</NavLink>
           <NavLink to="/peer-review">Peer review</NavLink>
+          {can('hl7.raw.view') && <NavLink to="/messages">HL7 messages</NavLink>}
           {can('errors.manage') && <NavLink to="/errors">Errors</NavLink>}
           <NavLink to="/availability">Availability</NavLink>
           <NavLink to="/rota">Rota</NavLink>
@@ -86,6 +88,7 @@ export function App() {
             <Route path="/studies" element={<Studies />} />
             <Route path="/studies/:id" element={<StudyDetail />} />
             <Route path="/errors" element={<Errors />} />
+            <Route path="/messages" element={<Messages />} />
             <Route path="/availability" element={<Availability />} />
             <Route path="/rules" element={<Rules />} />
             <Route path="/masters" element={<Masters />} />

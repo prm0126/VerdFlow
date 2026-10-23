@@ -19,8 +19,10 @@ import {
   PeerReviewController,
   OpsController,
   AssistantController,
+  MessagesController,
 } from './app.controllers';
 import { AssistantService } from './assistant/assistant.service';
+import { MessagesService } from './messages/messages.service';
 import { AuthService } from './auth/auth.service';
 import { AuthGuard } from './auth/guard';
 import { AvailabilityService } from './availability/availability.service';
@@ -54,6 +56,7 @@ const services = [
   { provide: EscalationsService, deps: false },
   { provide: PeerReviewService, deps: false },
   { provide: AssistantService, deps: true },
+  { provide: MessagesService, deps: false },
 ].map(({ provide, deps }) => ({
   provide,
   inject: [PG_POOL, APP_CONFIG],
@@ -90,6 +93,7 @@ export class AppModule {
         PeerReviewController,
         OpsController,
         AssistantController,
+        MessagesController,
       ],
       providers: [
         ...services,

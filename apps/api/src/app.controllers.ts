@@ -23,6 +23,7 @@ import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { AssistantService } from './assistant/assistant.service';
+import { MessagesService } from './messages/messages.service';
 import { AuthService, type SessionUser } from './auth/auth.service';
 import { CurrentUser, Public, RequirePermission, SESSION_COOKIE } from './auth/guard';
 import { AvailabilityService } from './availability/availability.service';
@@ -629,5 +630,42 @@ export class AssistantController {
   @HttpCode(200)
   draftRules(@Body() body: { instruction?: string }, @CurrentUser() user: SessionUser) {
     return run(() => this.assistant.draftRules(user, String(body?.instruction ?? '')));
+  }
+}
+
+@Controller('hl7')
+export class MessagesController {
+  constructor(private readonly messages: MessagesService) {}
+
+  @RequirePermission('hl7.raw.view')
+  @Get('received')
+  received(@Query('q') q?: string, @Query('status') status?: string, @Query('partner') partner?: string) {
+    return this.messages.received({ q, status, partner });
+  }
+
+  @RequirePermission('hl7.raw.view')
+  @Get('sent')
+  sent(@Query('q') q?: string, @Query('status') status?: string) {
+    return this.messages.sent({ q, status });
+  }
+
+  @RequirePermission('hl7.raw.view')
+  @Get('partners')
+  partners() {
+    return this.messages.partners();
+  }
+
+  @RequirePermission('hl7.send')
+  @Get('templates/:kind')
+  template(@Param('kind') kind: string, @Query('accession') accession?: string) {
+    return run(() => this.messages.template(kind, accession));
+  }
+
+  @RequirePermission('hl7.send')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Post('send')
+  @HttpCode(200)
+  send(@Body() body: { partner?: string; payload?: string }, @CurrentUser() user: SessionUser, @Req() req: Request) {
+    return run(() => this.messages.send(String(body?.partner ?? ''), String(body?.payload ?? ''), user.id, req.ip));
   }
 }

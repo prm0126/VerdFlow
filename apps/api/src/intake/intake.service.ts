@@ -10,12 +10,14 @@ export interface IntakeResult {
   intakeMessageId?: string;
 }
 
-interface Partner {
+export interface Partner {
   id: string;
   code: string;
   role: 'source' | 'reporting' | 'presence';
   allowed_facilities: string[];
 }
+
+const ackId = () => `VFA${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
 /**
  * HL7 intake boundary. The commit acknowledgment (CA) is returned only after the message is committed
@@ -35,11 +37,24 @@ export class IntakeService {
   }
 
   async receive(apiKey: string | undefined, raw: string): Promise<IntakeResult> {
-    const ackId = () => `VFA${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const partner = await this.authenticate(apiKey);
     if (!partner) {
       return { httpStatus: 401, outcome: 'unauthorised', ack: buildAck(undefined, 'CR', ackId(), 'Not authorised') };
     }
+    return this.receiveFromPartner(partner, raw);
+  }
+
+  /** An active inbound partner by code, for messages a signed-in user sends on its behalf. */
+  findPartner(code: string): Promise<Partner | null> {
+    return one<Partner>(
+      this.pool,
+      `SELECT id, code, role, allowed_facilities FROM integration_partners WHERE code = $1 AND direction = 'inbound' AND active`,
+      [code],
+    );
+  }
+
+  /** The receipt path after the partner is known: every check and the durable write happen here. */
+  async receiveFromPartner(partner: Partner, raw: string): Promise<IntakeResult> {
     if (!raw || new TextEncoder().encode(raw).length > MAX_HL7_BYTES) {
       return { httpStatus: 413, outcome: 'rejected', ack: buildAck(undefined, 'CR', ackId(), 'Message is empty or too large') };
     }
